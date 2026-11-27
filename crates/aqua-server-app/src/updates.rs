@@ -48,7 +48,8 @@ fn tester() -> bool {
 }
 static BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// What `install` will open / run.
-static FILE: Mutex<Option<(PathBuf, String, String)>> = Mutex::new(None);
+/// (file, address, SHA-256, version).
+static FILE: Mutex<Option<(PathBuf, String, String, String)>> = Mutex::new(None);
 
 fn set(f: impl FnOnce(&mut UpdState)) {
     if let Ok(mut g) = STATE.lock() {
@@ -176,7 +177,7 @@ async fn find_web(c: &reqwest::Client) -> Result<Option<Found>, String> {
         .filter_map(|l| l.rsplit_once("/releases/tag/v").map(|(_, v)| v.to_string()))
         .filter(|v| v.chars().next().is_some_and(|c| c.is_ascii_digit()))
         // The page doesn't say which are pre-releases: those are "X.Y.Z-N".
-        .filter(|v| tester() || !v.contains('-'))
+        .filter(|v| aqua_server::release::channel_allows(v, tester()))
         .reduce(|a, b| if newer(&b, &a) { b } else { a });
     let Some(version) = best else { return Ok(None) };
     if !newer(&version, cur) {
@@ -414,7 +415,7 @@ async fn pass(app: &AppHandle, install: bool) -> std::time::Duration {
     if cfg!(target_os = "android") {
         // Android installs an APK only through the system: the window offers it.
         if let Ok(mut g) = FILE.lock() {
-            *g = Some((PathBuf::new(), url, sha));
+            *g = Some((PathBuf::new(), url, sha, f.version.clone()));
         }
         set(|s| s.state = "ready".into());
         return EVERY;
@@ -424,7 +425,7 @@ async fn pass(app: &AppHandle, install: bool) -> std::time::Duration {
         Err(e) => return fail(e),
     };
     if let Ok(mut g) = FILE.lock() {
-        *g = Some((path, url, sha));
+        *g = Some((path, url, sha, f.version.clone()));
     }
     set(|s| s.state = "ready".into());
     if install && can_self_install() {
@@ -437,7 +438,12 @@ async fn pass(app: &AppHandle, install: bool) -> std::time::Duration {
 
 /// Put the downloaded file in place (or open it where that's all we can do).
 pub fn install_now(app: &AppHandle) -> Result<(), String> {
-    let (path, url, sha) = FILE.lock().ok().and_then(|g| g.clone()).ok_or("nothing downloaded yet")?;
+    let (path, url, sha, version) = FILE.lock().ok().and_then(|g| g.clone()).ok_or("nothing downloaded yet")?;
+    // The channel again, right before installing ("Tester" switched off
+    // since the download: a pre-release isn't installed).
+    if !aqua_server::release::channel_allows(&version, tester()) {
+        return Err("this update is a pre-release, and Tester is off".into());
+    }
     // Still the bytes that were checked (Android only opens the address).
     if !cfg!(target_os = "android") && file_sha256(&path).as_deref() != Some(sha.as_str()) {
         return Err("the downloaded update changed on disk — check for updates again".into());

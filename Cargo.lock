@@ -109,6 +109,7 @@ dependencies = [
  "hex",
  "hmac",
  "lettre",
+ "libc",
  "nu-ansi-term",
  "rand_core 0.6.4",
  "reqwest",
