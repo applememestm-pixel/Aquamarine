@@ -52,7 +52,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: python3 tools/addons_feed.py "$GITHUB_REPOSITORY" site/addons.json || echo '{"items":[]}' > site/addons.json
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: site
       - id: deployment
