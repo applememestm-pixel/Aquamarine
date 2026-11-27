@@ -56,6 +56,10 @@ path = "src/lib.rs"
 name = "aqua-server"
 path = "src/main.rs"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# selfupdate.rs: the checked binary runs from a sealed memfd (execveat).
+libc = "0.2"
+
 [dev-dependencies]
 tempfile           = "3"
 aqua-client-core   = { path = "../aqua-client-core" }

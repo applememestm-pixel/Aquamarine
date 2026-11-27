@@ -30,6 +30,9 @@ pub struct UpdateAsset {
     /// From SHA256SUMS.txt — only when that file is newer than this one
     /// (a nightly build still uploading has old sums).
     pub sha256: Option<String>,
+    /// The release's version (signed with the sums); set by the check.
+    #[serde(default)]
+    pub version: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -141,7 +144,7 @@ pub async fn update_check(channel: String) -> Result<UpdateInfo, String> {
         return Err(aqua_core::release::NO_KEY.into());
     }
     let mut info = find_release(&channel).await?;
-    let next = offer(&mut info, env!("CARGO_PKG_VERSION"));
+    let next = offer(&mut info, env!("CARGO_PKG_VERSION"), channel != "stable");
     *lock(&OFFERED) = next;
     Ok(info)
 }
@@ -163,20 +166,23 @@ async fn find_release(channel: &str) -> Result<UpdateInfo, String> {
 /// the page names it, but its checksum and address are taken from here.
 static OFFERED: std::sync::Mutex<Option<UpdateAsset>> = std::sync::Mutex::new(None);
 /// The downloaded file and its checksum: the only thing `update_install` runs.
-static READY: std::sync::Mutex<Option<(PathBuf, String)>> = std::sync::Mutex::new(None);
+static READY: std::sync::Mutex<Option<(PathBuf, String, String)>> = std::sync::Mutex::new(None);
 
 fn lock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// What may be installed over build `current`: a file with a signed
-/// checksum, of a newer release. Anything else loses its checksum.
-fn offer(info: &mut UpdateInfo, current: &str) -> Option<UpdateAsset> {
-    let up = info.version.as_deref().is_some_and(|v| newer(v, current));
+/// checksum, of a newer release this channel takes (pre-releases: testers
+/// only — told by the signed version, not the feed's `stable` key).
+/// Anything else loses its checksum.
+fn offer(info: &mut UpdateInfo, current: &str, tester: bool) -> Option<UpdateAsset> {
+    let up = info.version.as_deref().is_some_and(|v| newer(v, current) && aqua_core::release::channel_allows(v, tester));
     let asset = info.asset.as_mut()?;
     if !up {
         asset.sha256 = None;
     }
+    asset.version = info.version.clone().unwrap_or_default();
     asset.sha256.is_some().then(|| asset.clone())
 }
 
@@ -296,7 +302,7 @@ async fn web_check(http: &reqwest::Client, channel: &str) -> Result<UpdateInfo, 
             Err(_) => 0,
         };
         built_from = builds.as_ref().and_then(|b| b[*want].as_str()).map(|c| c.to_ascii_lowercase());
-        asset = Some(UpdateAsset { name: want.to_string(), url: dl(want), size, sha256: trusted.then_some(sha) });
+        asset = Some(UpdateAsset { name: want.to_string(), url: dl(want), size, sha256: trusted.then_some(sha), version: String::new() });
         break;
     }
     Ok(UpdateInfo {
@@ -393,6 +399,7 @@ async fn release_info(http: &reqwest::Client, rel: &serde_json::Value, channel: 
                 url: a["browser_download_url"].as_str().unwrap_or_default().to_string(),
                 size: a["size"].as_u64().unwrap_or(0),
                 sha256,
+                version: String::new(),
             });
             break;
         }
@@ -443,7 +450,7 @@ pub async fn update_download(app: AppHandle, asset: UpdateAsset) -> Result<Strin
     // Already downloaded and intact: nothing to fetch.
     if let Some(h) = file_sha256(&path) {
         if h == expected {
-            *lock(&READY) = Some((path.clone(), expected));
+            *lock(&READY) = Some((path.clone(), expected, asset.version.clone()));
             return Ok(path.display().to_string());
         }
     }
@@ -504,7 +511,7 @@ pub async fn update_download(app: AppHandle, asset: UpdateAsset) -> Result<Strin
     }
     let _ = std::fs::remove_file(&tag);
     std::fs::rename(&part, &path).map_err(|e| e.to_string())?;
-    *lock(&READY) = Some((path.clone(), expected));
+    *lock(&READY) = Some((path.clone(), expected, asset.version.clone()));
     Ok(path.display().to_string())
 }
 
@@ -530,16 +537,21 @@ impl std::io::Write for HashWriter<'_> {
 
 /// Install a file `update_download` fetched.
 #[tauri::command]
-pub async fn update_install(app: AppHandle, path: String) -> Result<String, String> {
+pub async fn update_install(app: AppHandle, path: String, channel: String) -> Result<String, String> {
     // The installer ends this process: the last messages go to disk first.
     crate::history::flush_app(&app);
     let p = PathBuf::from(&path);
     let dir = updates_dir(&app)?;
     // Only the file just downloaded, and still the same bytes.
     let ready = lock(&READY).clone();
-    let intact = ready.is_some_and(|(r, sha)| r == p && file_sha256(&p).is_some_and(|h| h == sha));
+    let intact = ready.as_ref().is_some_and(|(r, sha, _)| *r == p && file_sha256(&p).is_some_and(|h| h == *sha));
     if p.parent() != Some(dir.as_path()) || !intact {
         return Err("not a downloaded update".into());
+    }
+    // The channel again, right before installing: "Tester" switched off
+    // since the download — a pre-release isn't installed.
+    if !ready.is_some_and(|(_, _, v)| aqua_core::release::channel_allows(&v, channel != "stable")) {
+        return Err("this update is a pre-release, and Tester is off".into());
     }
     #[cfg(target_os = "android")]
     {
@@ -653,9 +665,10 @@ mod tests {
             published_at: String::new(),
             notes: String::new(),
             html_url: String::new(),
-            asset: Some(UpdateAsset { name: "Aquamarine.apk".into(), url: "u".into(), size: 1, sha256: sha.map(Into::into) }),
+            asset: Some(UpdateAsset { name: "Aquamarine.apk".into(), url: "u".into(), size: 1, sha256: sha.map(Into::into), version: String::new() }),
         };
-        let o = offer(&mut info("1.2.1", Some("good")), "1.2.0").unwrap();
+        let o = offer(&mut info("1.2.1", Some("good")), "1.2.0", false).unwrap();
+        assert_eq!(o.version, "1.2.1", "the offer carries its signed version (checked again at install)");
         let mut forged = o.clone();
         forged.sha256 = Some("evil".into());
         assert_eq!(offered(&forged, Some(&o)).unwrap().sha256.as_deref(), Some("good"));
@@ -664,10 +677,14 @@ mod tests {
         assert!(offered(&o, None).is_none(), "nothing was offered");
         for old in ["1.1.9", "1.2.0"] {
             let mut i = info(old, Some("good"));
-            assert!(offer(&mut i, "1.2.0").is_none(), "{old} over 1.2.0");
+            assert!(offer(&mut i, "1.2.0", true).is_none(), "{old} over 1.2.0");
             assert!(i.asset.unwrap().sha256.is_none());
         }
-        assert!(offer(&mut info("1.2.1", None), "1.2.0").is_none(), "unsigned");
+        assert!(offer(&mut info("1.2.1", None), "1.2.0", false).is_none(), "unsigned");
+        // A pre-release handed to the stable channel (the feed's `stable` key
+        // is the feed's word): not installed; testers take it.
+        assert!(offer(&mut info("1.2.1-3", Some("good")), "1.2.0", false).is_none(), "pre-release on stable");
+        assert!(offer(&mut info("1.2.1-3", Some("good")), "1.2.0", true).is_some(), "pre-release for a tester");
     }
 
     #[test]

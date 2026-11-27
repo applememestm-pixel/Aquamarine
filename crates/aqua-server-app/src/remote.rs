@@ -98,6 +98,20 @@ struct Live {
     secrets: HashMap<String, (String, String)>,
     errors: HashMap<String, String>,
     connecting: std::collections::HashSet<String>,
+    /// Host keys shown on a first connection, waiting for the person to
+    /// confirm them (`remote_trust`): nothing was sent to that machine yet.
+    pending_keys: HashMap<String, String>,
+}
+
+/// The start of the error a first connection ends with: the window shows
+/// the fingerprint after it and asks to confirm it (review of F, 27.11: the
+/// first connection took any host key and sent the password to it).
+pub const CONFIRM_KEY: &str = "confirm-host-key:";
+
+/// May the connection go on with host key `seen`? Only with the one
+/// confirmed before; none confirmed yet — no (the password isn't sent).
+fn host_key_ok(expected: &str, seen: &str) -> bool {
+    !expected.is_empty() && expected == seen
 }
 
 static LIVE: Mutex<Option<Live>> = Mutex::new(None);
@@ -179,8 +193,9 @@ impl client::Handler for Hk {
             PublicKeyOrCertificate::PublicKey { key, .. } => key.fingerprint(HashAlg::Sha256).to_string(),
             PublicKeyOrCertificate::Certificate(c) => c.public_key().fingerprint(HashAlg::Sha256).to_string(),
         };
-        *self.seen.lock().unwrap_or_else(|e| e.into_inner()) = fp.clone();
-        Ok(self.expected.is_empty() || self.expected == fp)
+        let ok = host_key_ok(&self.expected, &fp);
+        *self.seen.lock().unwrap_or_else(|e| e.into_inner()) = fp;
+        Ok(ok)
     }
 }
 
@@ -250,10 +265,24 @@ async fn connect_inner(app: &AppHandle, id: &str) -> Result<(), String> {
     });
     let hk = Hk { expected: r.fingerprint.clone(), seen: seen.clone() };
     let addr = (r.host.trim().to_string(), r.ssh_port);
-    let mut h = tokio::time::timeout(std::time::Duration::from_secs(20), client::connect(cfg, addr, hk))
+    let connected = tokio::time::timeout(std::time::Duration::from_secs(20), client::connect(cfg, addr, hk))
         .await
-        .map_err(|_| "no answer from the machine (timeout)".to_string())?
-        .map_err(|e| friendly(&e))?;
+        .map_err(|_| "no answer from the machine (timeout)".to_string())?;
+    let mut h = match connected {
+        Ok(h) => h,
+        Err(e) => {
+            let fp = seen.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            // Refused at the host key, before any password or key was sent.
+            if !fp.is_empty() && !host_key_ok(&r.fingerprint, &fp) {
+                if r.fingerprint.is_empty() {
+                    live(|l| l.pending_keys.insert(id.to_string(), fp.clone()));
+                    return Err(format!("{CONFIRM_KEY}{fp}"));
+                }
+                return Err(format!("the machine's SSH key has changed since the last connection (was {}, now {fp}) — refused. If that's expected, remove the server and add it again", r.fingerprint));
+            }
+            return Err(friendly(&e));
+        }
+    };
     let user = r.user.trim().to_string();
     let ok = if r.auth == "key" {
         let key = decode_secret_key(secret.trim(), (!passphrase.is_empty()).then_some(passphrase.as_str())).map_err(|e| format!("the key: {e}"))?;
@@ -264,15 +293,6 @@ async fn connect_inner(app: &AppHandle, id: &str) -> Result<(), String> {
     };
     if !ok {
         return Err("SSH: wrong login, password or key".into());
-    }
-    // First connection: remember the host key.
-    let fp = seen.lock().unwrap_or_else(|e| e.into_inner()).clone();
-    if r.fingerprint.is_empty() && !fp.is_empty() {
-        let mut list = load(app);
-        if let Some(x) = list.iter_mut().find(|x| x.id == id) {
-            x.fingerprint = fp;
-        }
-        let _ = save(app, &list);
     }
     // Port and token: given, or from panel.json.
     let panel = if r.token.is_empty() || r.server_port == 0 { read_panel(&h).await } else { None };
@@ -463,6 +483,22 @@ pub async fn remote_delete(app: AppHandle, id: String) -> Result<(), String> {
     save(&app, &list)
 }
 
+/// The person compared the fingerprint shown on the first connection and
+/// trusts it: kept, and only that key is accepted from then on.
+#[tauri::command]
+pub fn remote_trust(app: AppHandle, id: String, fingerprint: String) -> Result<(), String> {
+    let shown = live(|l| l.pending_keys.get(&id).cloned());
+    if shown.as_deref() != Some(fingerprint.as_str()) {
+        return Err("that isn't the key the machine showed — connect again".into());
+    }
+    let mut list = load(&app);
+    let x = list.iter_mut().find(|x| x.id == id).ok_or("no such server")?;
+    x.fingerprint = fingerprint;
+    save(&app, &list)?;
+    live(|l| l.pending_keys.remove(&id));
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn remote_connect(app: AppHandle, id: String) -> Result<RemoteView, String> {
     connect(&app, &id).await
@@ -472,4 +508,19 @@ pub async fn remote_connect(app: AppHandle, id: String) -> Result<RemoteView, St
 pub async fn remote_disconnect(app: AppHandle, id: String) -> Vec<RemoteView> {
     disconnect(&id).await;
     remote_list(app)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::host_key_ok;
+
+    /// The first connection goes no further than the host key: nothing is
+    /// sent until it is confirmed; then only that key; a change is refused.
+    #[test]
+    fn only_a_confirmed_host_key() {
+        let fp = "SHA256:abc";
+        assert!(!host_key_ok("", fp), "first connection: not before the person confirms");
+        assert!(host_key_ok(fp, fp));
+        assert!(!host_key_ok(fp, "SHA256:other"), "a changed key is refused");
+    }
 }

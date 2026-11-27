@@ -73,6 +73,18 @@ docker run -d --name aquamarine-server --restart unless-stopped \
   ghcr.io/applememestm-pixel/aquamarine-server:latest
 ```
 
+**Проверенный образ.** Тег `latest` можно передвинуть, digest образа — нет. Начиная с 1.21.0-26 каждый выпуск называет свои образы по digest в файлах `IMAGE-server.txt` и `IMAGE-site.txt`, а их суммы подписаны ключом выпусков. Скрипт сайта проверяет подпись и печатает ссылку на образ (нужны `curl` и `openssl`):
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/applememestm-pixel/Aquamarine/main/tools/aquamarine-site.sh
+IMG=$(bash aquamarine-site.sh image server)    # для пре-выпуска: TAG=v1.21.0-26 bash …
+docker run -d --name aquamarine-server --restart unless-stopped \
+  -p 7777:7777 -p 3478:3478/udp -v aquamarine-data:/data \
+  -e AQUA_ADMIN_TOKEN=ВАШ-ПАРОЛЬ-ДЛЯ-ПАНЕЛИ "$IMG"
+```
+
+Дальше сервер обновляется сам: новый бинарник он проверяет по подписи выпуска до запуска.
+
 Windows (PowerShell), то же одной строкой:
 
 ```powershell

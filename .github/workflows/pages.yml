@@ -45,6 +45,8 @@ jobs:
       - name: Add the update feed
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          # Only releases whose sums this key signed are listed.
+          UPDATE_PUBKEY: ${{ vars.UPDATE_PUBKEY }}
         run: python3 tools/updates_feed.py "$GITHUB_REPOSITORY" site/updates.json
       # The add-on catalogue (addons.html): plugins from addons/ and from
       # public repositories with the topic "aquamarine-plugin".
