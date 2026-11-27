@@ -40,7 +40,7 @@ jobs:
 
       - name: Attach to release (on tags)
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: dist/aqua-server.exe
 
@@ -101,6 +101,6 @@ jobs:
 
       - name: Attach to release (on tags)
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: dist/aquamarine.exe

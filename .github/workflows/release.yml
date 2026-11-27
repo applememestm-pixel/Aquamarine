@@ -234,7 +234,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Attach to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.REL_TAG }}
           prerelease: ${{ env.NIGHTLY == 'true' || env.PRE == 'true' }}
@@ -323,7 +323,7 @@ jobs:
           if-no-files-found: error
 
       - name: Attach to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.REL_TAG }}
           prerelease: ${{ env.NIGHTLY == 'true' || env.PRE == 'true' }}
@@ -429,7 +429,7 @@ jobs:
           if-no-files-found: error
 
       - name: Attach to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.REL_TAG }}
           prerelease: ${{ env.NIGHTLY == 'true' || env.PRE == 'true' }}
@@ -604,7 +604,7 @@ jobs:
           if-no-files-found: error
 
       - name: Attach to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.REL_TAG }}
           prerelease: ${{ env.NIGHTLY == 'true' || env.PRE == 'true' }}
@@ -733,7 +733,7 @@ jobs:
           if-no-files-found: error
 
       - name: Attach to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.REL_TAG }}
           prerelease: ${{ env.NIGHTLY == 'true' || env.PRE == 'true' }}
@@ -802,7 +802,7 @@ jobs:
           if-no-files-found: error
 
       - name: Attach to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.REL_TAG }}
           prerelease: ${{ env.NIGHTLY == 'true' || env.PRE == 'true' }}
@@ -891,7 +891,7 @@ jobs:
           tar -C out -czf aquamarine-site.tar.gz aquamarine-site
           ls -la aquamarine-site.tar.gz
       - name: Attach to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.REL_TAG }}
           prerelease: ${{ env.NIGHTLY == 'true' || env.PRE == 'true' }}
