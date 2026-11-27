@@ -124,9 +124,11 @@ release_tag() {
 
 # The image named in a checked IMAGE-*.txt: exactly one reference by digest
 # (AQUA-SEC-012: a tag such as :latest can be moved; a digest can't).
+# $2 — which image was asked for (site | server): exactly that one.
 image_ref() {
-  local ref; ref=$(head -n1 "$1" | tr -d '\r')
-  printf '%s' "$ref" | grep -qE '^ghcr\.io/applememestm-pixel/aquamarine-(site|server)@sha256:[0-9a-f]{64}$' || die "в $1 нет ссылки на образ по digest"
+  local ref which=$2; ref=$(head -n1 "$1" | tr -d '\r')
+  case "$which" in site|server) ;; *) die "образ: site или server" ;; esac
+  printf '%s' "$ref" | grep -qE "^ghcr\\.io/applememestm-pixel/aquamarine-$which@sha256:[0-9a-f]{64}\$" || die "в $1 нет ссылки на образ $which по digest"
   printf '%s' "$ref"
 }
 
@@ -142,7 +144,7 @@ verified_image() {
       || [ "$f" != "$file" ] || die "у выпуска $tag нет подписанного digest образа $which"
   done
   verify_release "$tmp" "$tag" "$file"
-  image_ref "$tmp/$file"
+  image_ref "$tmp/$file" "$which"
   rm -rf "$tmp"
 }
 
