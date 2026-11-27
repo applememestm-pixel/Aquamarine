@@ -6,6 +6,7 @@
 #   bash aquamarine-site.sh            # отдать сайт на http://<адрес>:8080/
 #   bash aquamarine-site.sh update     # скачать свежую версию и отдать
 #   bash aquamarine-site.sh docker     # то же в Docker-контейнере (фоном, с автозапуском)
+#   bash aquamarine-site.sh image server   # проверенный подписью образ сервера (по digest)
 #   bash aquamarine-site.sh stop       # остановить контейнер
 #   PORT=9000 bash aquamarine-site.sh  # другой порт
 #   TAG=v1.21.0-24 bash aquamarine-site.sh update   # другой выпуск (по умолчанию — последний)
@@ -24,7 +25,6 @@ TAG="${TAG:-latest}"
 # release-signing-check.yml сверяет). Сайт ставится, только если архив
 # назван в SHA256SUMS.txt, подписанном этим ключом (AQUA-SEC-012).
 PUBKEY="d5753e7d1aa56046d29e0bbcf220497d78a4def55fec7c62d862e1d42f095d96"
-IMAGE="ghcr.io/applememestm-pixel/aquamarine-site:latest"
 NAME="aquamarine-site"
 HERE="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")" && pwd)"
 DATA="${XDG_DATA_HOME:-$HOME/.local/share}/aquamarine-site"
@@ -68,24 +68,6 @@ docker_cmd() {
   fi
 }
 
-case "$CMD" in
-  docker)
-    docker_cmd
-    "${DOCKER[@]}" pull "$IMAGE"
-    "${DOCKER[@]}" rm -f "$NAME" >/dev/null 2>&1 || true
-    "${DOCKER[@]}" run -d --name "$NAME" --restart unless-stopped -p "$PORT:8080" "$IMAGE" >/dev/null
-    addresses
-    say "Контейнер $NAME работает фоном и поднимается сам после перезагрузки."
-    say "Остановить: bash $0 stop"
-    exit 0 ;;
-  stop)
-    docker_cmd
-    "${DOCKER[@]}" rm -f "$NAME" >/dev/null 2>&1 && say "Контейнер $NAME остановлен." || say "Контейнера $NAME нет."
-    exit 0 ;;
-  serve|update) ;;
-  -h|--help|help) sed -n '2,15p' "$0"; exit 0 ;;
-  *) die "неизвестная команда: $CMD (serve | update | docker | stop)" ;;
-esac
 
 # --- Files ------------------------------------------------------------------
 need() {
@@ -128,10 +110,8 @@ verify_release() {
   grep -qiE "^$h [ *]?$file\$" "$d/SHA256SUMS.txt" || die "$file не совпадает с подписанным списком сумм — сайт не установлен"
 }
 
-fetch_site() {
-  need curl curl
-  need tar tar
-  local tmp; tmp=$(mktemp -d)
+# The release tag to use: TAG, or the latest release when TAG=latest.
+release_tag() {
   local tag=$TAG
   if [ "$tag" = latest ]; then
     # …/releases/latest ведёт на …/releases/tag/<тег>.
@@ -139,6 +119,38 @@ fetch_site() {
     tag=${tag##*/tag/}
   fi
   case "$tag" in v[0-9]*) ;; *) die "не похоже на тег выпуска: $tag" ;; esac
+  printf '%s' "$tag"
+}
+
+# The image named in a checked IMAGE-*.txt: exactly one reference by digest
+# (AQUA-SEC-012: a tag such as :latest can be moved; a digest can't).
+image_ref() {
+  local ref; ref=$(head -n1 "$1" | tr -d '\r')
+  printf '%s' "$ref" | grep -qE '^ghcr\.io/applememestm-pixel/aquamarine-(site|server)@sha256:[0-9a-f]{64}$' || die "в $1 нет ссылки на образ по digest"
+  printf '%s' "$ref"
+}
+
+# Download the release's IMAGE-<site|server>.txt with the signed sums,
+# check them, print the image reference.
+verified_image() {
+  need curl curl
+  local which=${1:-site} tmp tag; tmp=$(mktemp -d); tag=$(release_tag)
+  case "$which" in site|server) ;; *) die "образ: site или server" ;; esac
+  local file="IMAGE-$which.txt"
+  for f in "$file" SHA256SUMS.txt SHA256SUMS.txt.sig; do
+    curl -fsSL --retry 2 "https://github.com/$REPO/releases/download/$tag/$f" -o "$tmp/$f" \
+      || [ "$f" != "$file" ] || die "у выпуска $tag нет подписанного digest образа $which"
+  done
+  verify_release "$tmp" "$tag" "$file"
+  image_ref "$tmp/$file"
+  rm -rf "$tmp"
+}
+
+fetch_site() {
+  need curl curl
+  need tar tar
+  local tmp; tmp=$(mktemp -d)
+  local tag; tag=$(release_tag)
   local base="https://github.com/$REPO/releases/download/$tag"
   if [ "${FROM_MAIN:-0}" = 1 ]; then
     # Явно попросили: страницы прямо из ветки main, БЕЗ проверки подписи.
@@ -167,6 +179,33 @@ fetch_site() {
   rm -rf "$WWW" && mv "$WWW.new" "$WWW"
   rm -rf "$tmp"
 }
+
+case "$CMD" in
+  docker)
+    docker_cmd
+    # Only the image the signed release names, by its digest.
+    IMAGE=$(verified_image)
+    say "Образ (подпись выпуска верна): $IMAGE"
+    "${DOCKER[@]}" pull "$IMAGE"
+    "${DOCKER[@]}" rm -f "$NAME" >/dev/null 2>&1 || true
+    "${DOCKER[@]}" run -d --name "$NAME" --restart unless-stopped -p "$PORT:8080" "$IMAGE" >/dev/null
+    addresses
+    say "Контейнер $NAME работает фоном и поднимается сам после перезагрузки."
+    say "Остановить: bash $0 stop"
+    exit 0 ;;
+  image)
+    # The signed reference by digest, for `docker run` / compose:
+    #   docker run … "$(bash aquamarine-site.sh image server)"
+    verified_image "${2:-server}"; echo
+    exit 0 ;;
+  stop)
+    docker_cmd
+    "${DOCKER[@]}" rm -f "$NAME" >/dev/null 2>&1 && say "Контейнер $NAME остановлен." || say "Контейнера $NAME нет."
+    exit 0 ;;
+  serve|update) ;;
+  -h|--help|help) sed -n '2,15p' "$0"; exit 0 ;;
+  *) die "неизвестная команда: $CMD (serve | update | docker | image | stop)" ;;
+esac
 
 if src=$(local_source); then
   # A checkout: lay the pages and the Markdown documents out side by side.
