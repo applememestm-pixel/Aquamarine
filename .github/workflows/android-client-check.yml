@@ -32,7 +32,7 @@ jobs:
         with:
           workspaces: crates/aqua-client-ui -> target
           shared-key: android-client-check
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
