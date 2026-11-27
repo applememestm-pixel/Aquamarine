@@ -245,8 +245,13 @@ async fn find(c: &reqwest::Client, tester: bool) -> Result<Option<Found>, String
 }
 
 fn sha256_of(p: &Path) -> Option<String> {
-    use std::io::Read;
-    let mut f = std::fs::File::open(p).ok()?;
+    sha256_file(&mut std::fs::File::open(p).ok()?)
+}
+
+/// SHA-256 of what `f` holds, from its start.
+fn sha256_file(f: &mut std::fs::File) -> Option<String> {
+    use std::io::{Read, Seek};
+    f.seek(std::io::SeekFrom::Start(0)).ok()?;
     let mut h = Sha256::new();
     let mut buf = vec![0u8; 1 << 16];
     loop {
@@ -369,12 +374,23 @@ fn keep_staged(d: &Path, version: &str, (sums, sig): (&str, &str)) -> std::io::R
 
 /// The staged binary is the one release `version` lists in sums signed by
 /// `key` — checked again each time, the data folder can be written by others.
+#[cfg(test)]
 fn staged_is_genuine(d: &Path, version: &str, key: Option<&str>) -> bool {
+    staged_genuine(d, version, key).is_some()
+}
+
+/// The staged binary, opened once and checked through that handle: what is
+/// run is that handle (`restart_as_file`), so a file put in its place after
+/// the check (a rename by whoever can write the data folder) isn't run.
+fn staged_genuine(d: &Path, version: &str, key: Option<&str>) -> Option<std::fs::File> {
     let read = |f: &str| std::fs::read_to_string(d.join(f)).ok();
-    let (Some(sums), Some(sig), Some(name)) = (read("SHA256SUMS.txt"), read(aqua_core::release::SIG_ASSET), wanted()) else { return false };
-    aqua_core::release::sums_trusted_with(key, &sums, Some(&sig))
-        && aqua_core::release::sums_name_version(&sums, version)
-        && sums_line(&sums, name).is_some_and(|h| sha256_of(&d.join(bin_name())) == Some(h))
+    let (sums, sig, name) = (read("SHA256SUMS.txt")?, read(aqua_core::release::SIG_ASSET)?, wanted()?);
+    if !(aqua_core::release::sums_trusted_with(key, &sums, Some(&sig)) && aqua_core::release::sums_name_version(&sums, version)) {
+        return None;
+    }
+    let want = sums_line(&sums, name)?;
+    let mut f = std::fs::File::open(d.join(bin_name())).ok()?;
+    (sha256_file(&mut f)? == want).then_some(f)
 }
 
 /// At start (main.rs, after entering the data folder): when the data folder
@@ -404,13 +420,34 @@ pub fn run_newest() {
         let _ = std::fs::remove_dir_all(&d);
         return;
     }
-    if !staged_is_genuine(&d, &v, aqua_core::release::UPDATE_PUBKEY) {
+    let Some(checked) = staged_genuine(&d, &v, aqua_core::release::UPDATE_PUBKEY) else {
         // Not run; the next update check downloads or confirms it again.
         eprintln!("aqua-server {VERSION}: the staged {v} isn't confirmed by a signed release list — not started");
         return;
-    }
+    };
     eprintln!("aqua-server {VERSION}: starting the newer {v} from {}", staged.display());
-    restart_as(&staged);
+    restart_as_file(&staged, checked);
+}
+
+/// Run the very file checked (`f`), not whatever `bin` names by then. Linux:
+/// through `/proc/self/fd` (the kernel opens it before closing our handles).
+/// Elsewhere, or without /proc: by name, as before.
+fn restart_as_file(bin: &Path, f: std::fs::File) {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::AsRawFd;
+        let by_fd = PathBuf::from(format!("/proc/self/fd/{}", f.as_raw_fd()));
+        if by_fd.exists() {
+            crate::replay::Replay::shutdown_all();
+            use std::os::unix::process::CommandExt;
+            let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+            let e = std::process::Command::new(&by_fd).arg0(bin).args(&args).exec();
+            tracing::warn!(%e, "update: exec of the checked file failed");
+            return;
+        }
+    }
+    drop(f);
+    restart_as(bin);
 }
 
 /// Replace this process with `bin` (same arguments).
@@ -554,8 +591,6 @@ pub fn spawn(before_exit: impl Fn() + Send + Sync + 'static) {
 mod tests {
     use super::{bin_name, keep_staged, newer, staged_is_genuine, wanted};
 
-    /// A binary in the data folder runs only while a signed release list
-    /// still names exactly it and its version.
     #[test]
     fn a_pre_release_marked_stable_is_not_for_everyone() {
         // The feed says "not a pre-release"; its number says it is.
@@ -564,6 +599,8 @@ mod tests {
         assert_eq!(super::best(&list, true).map(|b| b.0).as_deref(), Some("9.9.0-1"));
     }
 
+    /// A binary in the data folder runs only while a signed release list
+    /// still names exactly it and its version.
     #[test]
     fn a_staged_binary_needs_its_signed_list() {
         let Some(name) = wanted() else { return };
@@ -581,6 +618,13 @@ mod tests {
         assert!(!staged_is_genuine(d, "9.0.1", None), "no key built in");
         std::fs::write(d.join(bin_name()), b"swapped").unwrap();
         assert!(!staged_is_genuine(d, "9.0.1", Some(&pk)), "changed file");
+        // Checked through one handle: a file renamed into its place after the
+        // check isn't what the handle holds (and so isn't what is run).
+        std::fs::write(d.join(bin_name()), b"new server").unwrap();
+        let mut checked = super::staged_genuine(d, "9.0.1", Some(&pk)).expect("genuine");
+        std::fs::write(d.join("evil"), b"swapped").unwrap();
+        std::fs::rename(d.join("evil"), d.join(bin_name())).unwrap();
+        assert_eq!(super::sha256_file(&mut checked), Some(aqua_core::hex_sha256(b"new server")));
     }
 
     #[test]
