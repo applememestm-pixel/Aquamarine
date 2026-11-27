@@ -13,6 +13,16 @@
 //!   leaves a mark; a start without that mark (a crash, a power cut, an
 //!   older build) takes no signature made before it — those may be among
 //!   the last ones not yet on disk;
+//! * (review of #113, 27.11) the floor only rises: every entry dropped as
+//!   expired raises it past its stamp, and it is kept in the file — a clock
+//!   that ran ahead, dropped an entry and came back (with or without a
+//!   restart meanwhile) can't make that signature good again;
+//! * after a crash the floor is the start plus a clock window: a signature
+//!   stamped ahead of our clock may have been taken and lost. Entries
+//!   stamped further ahead than that (passes, kept until they expire) are
+//!   synced before they are taken. A damaged file: the start plus `AHEAD`;
+//! * a clean mark that can't be taken away (it would say "clean" after a
+//!   crash) closes the table until it is gone;
 //! * one process at a time: a lock next to the file. A second process (the
 //!   new one while Windows replaces the old during an update) refuses until
 //!   the first is gone, then reads what it recorded.
@@ -28,6 +38,11 @@ const MAX: usize = 400_000;
 const MAX_PER: usize = 50_000;
 /// How often appended lines are synced to disk.
 const SYNC_MS: i64 = 1000;
+/// How far ahead of our clock an entry may be stamped: a pass is kept until
+/// it expires (`PASS_SECS` + a minute, lib.rs), a signature ±`SKEW_MS`.
+pub(crate) const AHEAD: i64 = 15 * 60 * 1000;
+/// The line holding the floor (`Inner::floor`) in the file.
+pub(crate) const FLOOR_SIG: &str = "floor:";
 
 pub struct Replay {
     inner: Mutex<Inner>,
@@ -53,6 +68,10 @@ struct Inner {
     /// Signatures made before this (ms) are refused: the last stop wasn't
     /// clean, and what was taken just before it may not be on disk.
     floor: i64,
+    /// A clean mark is on disk while we take signatures (it couldn't be
+    /// removed, or this table was stopped cleanly and is used again):
+    /// nothing is taken until it is gone.
+    mark_left: bool,
     /// The lock file held while this process owns the table.
     lock: Option<std::fs::File>,
     /// Another process held the lock at start: read the file again once ours.
@@ -106,6 +125,7 @@ impl Replay {
         };
         if synced && crate::fed::write_private(&mark_of(&path), "clean\n").is_ok() {
             g.file = None;
+            g.mark_left = true;
             if let Some(l) = g.lock.take() {
                 let _ = l.unlock();
             }
@@ -116,7 +136,7 @@ impl Replay {
     fn open(path: Option<PathBuf>, window: i64, max: usize, max_per: usize, now: i64) -> Self {
         let mut inner = Inner {
             seen: HashMap::new(), by_time: BTreeSet::new(), per: HashMap::new(), path, file: None, lines: 0, window, max, max_per,
-            closed_until: 0, floor: 0, lock: None, reload: false, last_sync: now, unsynced: false, work: 0,
+            closed_until: 0, floor: 0, mark_left: false, lock: None, reload: false, last_sync: now, unsynced: false, work: 0,
         };
         if inner.path.is_some() {
             if inner.acquire() {
@@ -141,6 +161,19 @@ impl Replay {
             if std::mem::take(&mut g.reload) {
                 g.load(now);
             }
+        }
+        if g.mark_left {
+            match std::fs::remove_file(mark_of(g.path.as_deref().unwrap_or(std::path::Path::new("")))) {
+                Ok(()) => g.mark_left = false,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => g.mark_left = false,
+                Err(e) => {
+                    tracing::error!(error = %e, "federation: the clean-stop mark of the used signatures can't be removed — signed requests refused until it is");
+                    return false;
+                }
+            }
+        }
+        if sig == FLOOR_SIG || ts > now + AHEAD {
+            return false;
         }
         if now < g.closed_until || ts < g.floor || !g.remember(sender, sig, ts, now) {
             return false;
@@ -197,17 +230,25 @@ impl Inner {
                         if i + 1 < lines.len() { damaged += 1; }
                         continue;
                     };
+                    if sig == FLOOR_SIG {
+                        self.floor = self.floor.max(ts);
+                        continue;
+                    }
                     // Lines of 1.21.0-24 name no sender.
                     let sender = it.next().unwrap_or("?").to_string();
                     // Not expired yet. Entries stamped ahead (a pass's nonce
-                    // is kept until the pass expires) are kept too.
+                    // is kept until the pass expires) are kept too. One that
+                    // expired raises the floor: it is never good again.
                     if now - ts <= self.window {
                         self.insert(sender, sig.to_string(), ts);
+                    } else {
+                        self.floor = self.floor.max(ts + 1);
                     }
                 }
                 if damaged > 0 {
-                    tracing::error!(damaged, "federation: the list of used signatures is damaged — signatures made before this start are refused");
-                    self.floor = now;
+                    tracing::error!(damaged, "federation: the list of used signatures is damaged — signed requests are refused for a quarter of an hour");
+                    // Whatever the line held was stamped at most `AHEAD` on.
+                    self.floor = self.floor.max(now + AHEAD + 1);
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -218,13 +259,19 @@ impl Inner {
             }
         }
         if found && !clean {
-            tracing::warn!("federation: the last stop wasn't clean — signatures made before this start are refused");
-            self.floor = now;
+            tracing::warn!("federation: the last stop wasn't clean — signed requests are refused for one clock window");
+            // Lost may be what wasn't synced: stamped at most a window ahead
+            // of the clock then (further ahead is synced before it's taken).
+            self.floor = self.floor.max(now + self.window + 1);
         }
-        // Running now: the mark is for the next start to find, after a clean stop.
+        if self.floor > now + AHEAD + self.window + 1 {
+            tracing::error!(floor = self.floor, now, "federation: the clock is far behind what the list of used signatures saw — signed requests are refused until it catches up (or remove the list after checking the clock)");
+        }
+        // Running now: the mark is for the next start to find, after a clean
+        // stop. Can't take it away: it would say "clean" after a crash —
+        // nothing is taken until it is gone (`take`).
         if clean && std::fs::remove_file(&mark).is_err() {
-            // Can't take it away: it would say "clean" after a crash.
-            self.floor = now;
+            self.mark_left = true;
         }
         // Drops what expired.
         if found {
@@ -262,6 +309,8 @@ impl Inner {
                 break;
             }
             self.work += 1;
+            // Never good again, even if the clock comes back.
+            self.floor = self.floor.max(ts + 1);
             self.forget(&sig);
         }
     }
@@ -308,7 +357,9 @@ impl Inner {
             f.write_all(format!("{ts} {sig} {sender}\n").as_bytes())?;
             self.lines += 1;
             self.unsynced = true;
-            if now - self.last_sync >= SYNC_MS {
+            // Stamped further ahead than the floor after a crash reaches:
+            // on disk before it's taken.
+            if now - self.last_sync >= SYNC_MS || ts > now + self.window {
                 f.sync_data()?;
                 self.last_sync = now;
                 self.unsynced = false;
@@ -323,16 +374,13 @@ impl Inner {
             return Ok(());
         };
         self.file = None;
-        let text: String = self
-            .seen
-            .iter()
-            .map(|(sig, (ts, sender))| format!("{ts} {sig} {sender}\n"))
-            .collect();
+        let mut text: String = if self.floor > 0 { format!("{} {FLOOR_SIG} -\n", self.floor) } else { String::new() };
+        text.extend(self.seen.iter().map(|(sig, (ts, sender))| format!("{ts} {sig} {sender}\n")));
         let tmp = path.with_extension("tmp");
         crate::fed::write_private(&tmp, &text)?;
         std::fs::File::open(&tmp)?.sync_all()?;
         std::fs::rename(&tmp, &path)?;
-        self.lines = self.seen.len();
+        self.lines = self.seen.len() + 1;
         Ok(())
     }
 }
@@ -387,7 +435,8 @@ mod tests {
         let again = Replay::open(Some(file), WINDOW, 100, 100, NOW + 10);
         assert!(!again.take("s", "bb", NOW, NOW + 10), "the lost entry can't be replayed");
         assert!(!again.take("s", "zz", NOW + 5, NOW + 10), "nothing signed before the start");
-        assert!(again.take("s", "fresh", NOW + 10, NOW + 10));
+        let after = NOW + 11 + super::AHEAD;
+        assert!(again.take("s", "fresh", after, after), "after the floor");
     }
 
     /// The clock went back (NTP, a dead RTC battery): entries stamped "in the
@@ -400,6 +449,104 @@ mod tests {
         let back = NOW - 3_600_000;
         assert!(!r.take("s", "a", NOW, back), "still remembered an hour \"earlier\"");
         assert!(r.take("s", "b", back, back));
+    }
+
+    /// Review of #113 (27.11): the clock runs ahead past the window, the
+    /// table drops the entry as expired, then the clock comes back — the
+    /// signature was good again. Also across a restart made meanwhile.
+    #[test]
+    fn a_clock_jump_forward_then_back_does_not_reopen_a_signature() {
+        let r = Replay::open(None, WINDOW, 100, 100, NOW);
+        assert!(r.take("s", "a", NOW, NOW));
+        let ahead = NOW + 3 * WINDOW;
+        assert!(r.take("s", "b", ahead, ahead), "the jump forward prunes \"a\"");
+        assert!(!r.take("s", "a", NOW, NOW + 1), "back again: still used");
+        assert!(r.take("s", "c", NOW + 2, NOW + 2), "newer than anything dropped: fine");
+
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("seen.log");
+        let first = Replay::open(Some(file.clone()), WINDOW, 100, 100, NOW);
+        assert!(first.take("s", "a", NOW, NOW));
+        first.close_clean();
+        drop(first);
+        // Restarted while the clock was ahead: "a" left the file as expired.
+        let ahead = Replay::open(Some(file.clone()), WINDOW, 100, 100, NOW + 3 * WINDOW);
+        ahead.close_clean();
+        drop(ahead);
+        let back = Replay::open(Some(file), WINDOW, 100, 100, NOW + 1);
+        assert!(!back.take("s", "a", NOW, NOW + 1), "back after a restart: still used");
+    }
+
+    /// Review of #113: the clean mark that can't be taken away would say
+    /// "clean" after a crash — nothing is taken until it is gone.
+    #[test]
+    fn a_clean_mark_that_stays_closes_the_table() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("seen.log");
+        let first = Replay::open(Some(file.clone()), WINDOW, 100, 100, NOW);
+        assert!(first.take("s", "a", NOW, NOW));
+        first.close_clean();
+        drop(first);
+        // The mark can't be removed (here: a folder with a file in it).
+        let mark = super::mark_of(&file);
+        std::fs::remove_file(&mark).unwrap();
+        std::fs::create_dir(&mark).unwrap();
+        std::fs::write(mark.join("x"), "").unwrap();
+        let again = Replay::open(Some(file.clone()), WINDOW, 100, 100, NOW + 10);
+        assert!(!again.take("s", "fresh", NOW + 10, NOW + 10), "refused while the mark stays");
+        std::fs::remove_dir_all(&mark).unwrap();
+        assert!(again.take("s", "fresh", NOW + 20, NOW + 20), "taken once it is gone");
+        // A table stopped cleanly and used again in the same process takes
+        // its mark away again first.
+        again.close_clean();
+        assert!(mark.exists());
+        assert!(again.take("s", "more", NOW + 30, NOW + 30));
+        assert!(!mark.exists(), "running again: no clean mark left behind");
+    }
+
+    /// Review of #113: a crash loses what wasn't synced. A signature stamped
+    /// a little ahead of our clock, or a pass (stamped with its expiry, up
+    /// to 11 minutes ahead), was past the floor "now" of the next start.
+    #[test]
+    fn a_crash_loses_nothing_stamped_ahead() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("seen.log");
+        let first = Replay::open(Some(file.clone()), WINDOW, 100, 100, NOW);
+        assert!(first.take("s", "ahead", NOW + WINDOW - 1, NOW));
+        assert!(first.take("pass", "pass:n1", NOW + 660_000, NOW));
+        drop(first); // a crash...
+        // ...and what wasn't synced is gone: only what is synced remains.
+        let kept: String = std::fs::read_to_string(&file).unwrap().lines().filter(|l| !l.contains(" ahead ")).map(|l| format!("{l}\n")).collect();
+        std::fs::write(&file, kept).unwrap();
+        let later = NOW + 1000;
+        let again = Replay::open(Some(file.clone()), WINDOW, 100, 100, later);
+        assert!(!again.take("s", "ahead", NOW + WINDOW - 1, later), "a signature stamped ahead isn't taken again");
+        assert!(!again.take("pass", "pass:n1", NOW + 660_000, later), "a pass taken before the crash was on disk");
+        let after = later + WINDOW + 1;
+        assert!(again.take("s", "fresh", after, after), "signed after the floor: fine");
+    }
+
+    /// A damaged line may have held anything up to the furthest stamp
+    /// allowed: nothing stamped up to there is taken.
+    #[test]
+    fn a_damaged_log_refuses_passes_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("seen.log");
+        std::fs::write(&file, format!("{NOW} ok s\n\u{fffd}garbage\n{NOW} ok2 s\n")).unwrap();
+        std::fs::write(super::mark_of(&file), "clean\n").unwrap();
+        let r = Replay::open(Some(file), WINDOW, 100, 100, NOW);
+        assert!(!r.take("pass", "pass:lost", NOW + 660_000, NOW), "a pass of the damaged line");
+        assert!(!r.take("s", "ahead", NOW + WINDOW, NOW));
+    }
+
+    /// Nothing is taken stamped further ahead than a pass can be: such an
+    /// entry would hold its place (and the floor) for no reason.
+    #[test]
+    fn too_far_ahead_is_refused() {
+        let r = Replay::open(None, WINDOW, 100, 100, NOW);
+        assert!(!r.take("pass", "pass:far", NOW + super::AHEAD + 1, NOW));
+        assert!(r.take("pass", "pass:near", NOW + super::AHEAD, NOW));
+        assert!(!r.take("s", super::FLOOR_SIG, NOW, NOW), "the floor line's name is reserved");
     }
 
     /// Load: how fast the table takes signatures with its file (printed, run
@@ -468,7 +615,9 @@ mod tests {
         let again = Replay::open(Some(file.clone()), WINDOW, 100, 100, later);
         assert!(!again.take("s", "lost", NOW + 500, later), "signed before this start");
         assert!(!again.take("s", "a", NOW, later), "the lost one isn't taken again either");
-        assert!(again.take("s", "fresh", later, later), "signed after it: fine");
+        assert!(!again.take("s", "fresh", later, later), "nor anything within a window of the start");
+        let after = later + WINDOW + 1;
+        assert!(again.take("s", "fresh", after, after), "signed after that: fine");
     }
 
     /// A5: after a clean stop, signatures from before it still work (a peer
@@ -537,7 +686,8 @@ mod tests {
         drop(first);
         let again = Replay::open(Some(file.clone()), WINDOW, 100, 100, NOW + 1);
         assert!(!again.take("s", "v2:node:nonce", NOW, NOW + 1), "replayed after a restart");
-        assert!(again.take("s", "new", NOW + 1, NOW + 1));
+        let after = NOW + 2 + WINDOW;
+        assert!(again.take("s", "new", after, after));
         // What expired isn't carried on.
         assert!(!std::fs::read_to_string(&file).unwrap().contains("old"));
     }
@@ -547,6 +697,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("seen.log");
         std::fs::write(&file, format!("{NOW} whole\n{NOW}")).unwrap();
+        std::fs::write(super::mark_of(&file), "clean\n").unwrap();
         let r = Replay::open(Some(file.clone()), WINDOW, 100, 100, NOW);
         assert!(!r.take("s", "whole", NOW, NOW));
         assert!(r.take("s", "next", NOW, NOW));
