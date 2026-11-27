@@ -2908,6 +2908,19 @@ impl Directory {
         let _ = db.execute("DELETE FROM push_endpoints WHERE user=?1 AND device=?2", rusqlite::params![user, device]);
     }
 
+    /// Forget it only while it is still `endpoint` (a late "gone" about an
+    /// older address leaves the newer one).
+    pub fn push_unregister_if(&self, user: &str, device: &str, endpoint: &str) {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = db.execute("DELETE FROM push_endpoints WHERE user=?1 AND device=?2 AND endpoint=?3", rusqlite::params![user, device, endpoint]);
+    }
+
+    /// `(kind, endpoint)` where `user`'s device `device` is woken now.
+    pub fn push_endpoint(&self, user: &str, device: &str) -> Option<(String, String)> {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        db.query_row("SELECT kind, endpoint FROM push_endpoints WHERE user=?1 AND device=?2", rusqlite::params![user, device], |r| Ok((r.get(0)?, r.get(1)?))).ok()
+    }
+
     /// `(device, kind, endpoint)` of every device of `user` that can be woken.
     pub fn push_endpoints(&self, user: &str) -> Vec<(String, String, String)> {
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());

@@ -15,6 +15,11 @@ use tokio_tungstenite::tungstenite::Message;
 
 const SECRET: &str = "a-long-shared-federation-secret";
 
+/// The wake limit and "local addresses allowed" are for the whole process:
+/// these tests run one at a time, each with its own limit (they ran side by
+/// side, and one's 0.8 s limit met another's 20 s expectation).
+static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 async fn token(http: &reqwest::Client, base: &str, id: &IdentityKeyPair) -> String {
     let chal: ChallengeResponse = http.post(format!("{base}/v1/auth/challenge"))
         .json(&ChallengeRequest { identity_dh_pub: URL_SAFE_NO_PAD.encode(id.public().dh_pub.as_bytes()) })
@@ -69,7 +74,9 @@ fn msg(from: &str, to: &str, body: &[u8]) -> Message {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_absent_device_gets_only_a_wake_signal() {
     use std::sync::{Arc, Mutex};
+    let _one = SERIAL.lock().await;
     aqua_server::push::allow_local_for_tests();
+    aqua_server::push::set_debounce_for_tests(Duration::from_secs(20));
     // A UnifiedPush distributor and a gateway that record what they get.
     let got: Arc<Mutex<Vec<(String, Vec<u8>)>>> = Default::default();
     let gone = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -147,6 +154,7 @@ async fn an_absent_device_gets_only_a_wake_signal() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_suppressed_wake_follows_later_and_stale_devices_are_dropped() {
     use std::sync::{Arc, Mutex};
+    let _one = SERIAL.lock().await;
     aqua_server::push::allow_local_for_tests();
     aqua_server::push::set_debounce_for_tests(Duration::from_millis(800));
     let got: Arc<Mutex<Vec<(String, Option<String>)>>> = Default::default();
@@ -209,3 +217,99 @@ async fn a_suppressed_wake_follows_later_and_stale_devices_are_dropped() {
     let gw = seen.iter().find(|(p, _)| p == "/v1/wake").expect("gateway asked");
     assert_eq!(gw.1.as_deref(), Some("Bearer relay-key-for-gateway"));
 }
+
+/// A distributor that records each wake by path; "/gone…" answers 410 after
+/// a pause (a slow answer about an old address).
+async fn distributor() -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    let got: std::sync::Arc<std::sync::Mutex<Vec<String>>> = Default::default();
+    let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let up = format!("http://{}", l.local_addr().unwrap());
+    let g = got.clone();
+    let r = axum::Router::new().fallback(move |req: axum::extract::Request| {
+        let g = g.clone();
+        async move {
+            let path = req.uri().path().to_string();
+            g.lock().unwrap().push(path.clone());
+            if path.starts_with("/gone") {
+                tokio::time::sleep(Duration::from_millis(800)).await;
+                return axum::http::StatusCode::GONE;
+            }
+            axum::http::StatusCode::CREATED
+        }
+    });
+    tokio::spawn(async move { axum::serve(l, r).await.unwrap() });
+    (up, got)
+}
+
+async fn relay() -> (AppState, String, reqwest::Client, tempfile::TempDir) {
+    let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let ua = format!("http://{}", l.local_addr().unwrap());
+    let tmp = tempfile::tempdir().unwrap();
+    let sa = AppState::isolated(tmp.path().join("a"), None);
+    { let s = sa.clone(); tokio::spawn(async move { axum::serve(l, app(s)).await.unwrap() }); }
+    let http = reqwest::Client::builder().user_agent(concat!("aqua-client-core/", env!("CARGO_PKG_VERSION"))).build().unwrap();
+    (sa, ua, http, tmp)
+}
+
+async fn set_push(http: &reqwest::Client, ua: &str, tok: &str, endpoint: &str) {
+    let r = http.post(format!("{ua}/v1/me/push")).bearer_auth(tok).json(&serde_json::json!({ "kind": "unifiedpush", "endpoint": endpoint })).send().await.unwrap();
+    assert_eq!(r.status().as_u16(), 204);
+}
+
+/// Review of #115 (27.11): a wake held back by the limit went, when the limit
+/// ended, to the address it was planned for — even after the device changed
+/// it or stopped being woken.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_held_back_wake_goes_to_the_address_the_device_has_then() {
+    let _one = SERIAL.lock().await;
+    aqua_server::push::allow_local_for_tests();
+    aqua_server::push::set_debounce_for_tests(Duration::from_millis(600));
+    let (up, got) = distributor().await;
+    let (sa, ua, http, _tmp) = relay().await;
+    let tok = register(&http, &ua, &IdentityKeyPair::generate(), "heldback").await;
+    set_push(&http, &ua, &tok, &format!("{up}/old")).await;
+    aqua_server::push::wake(&sa, "heldback");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    aqua_server::push::wake(&sa, "heldback"); // held back
+    set_push(&http, &ua, &tok, &format!("{up}/new")).await;
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    let seen = got.lock().unwrap().clone();
+    assert_eq!(seen, vec!["/old", "/new"], "the held-back one goes to the new address");
+    // Stopped meanwhile: the held-back one goes nowhere.
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    aqua_server::push::wake(&sa, "heldback");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    aqua_server::push::wake(&sa, "heldback"); // held back
+    let r = http.delete(format!("{ua}/v1/me/push")).bearer_auth(&tok).send().await.unwrap();
+    assert_eq!(r.status().as_u16(), 204);
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    let seen = got.lock().unwrap().clone();
+    assert_eq!(seen, vec!["/old", "/new", "/new"], "nothing after it stopped being woken: {seen:?}");
+}
+
+/// Review of #115: a late "410 gone" about the old address removed the new
+/// registration of the same device.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn gone_from_the_old_address_keeps_the_new_one() {
+    let _one = SERIAL.lock().await;
+    aqua_server::push::allow_local_for_tests();
+    aqua_server::push::set_debounce_for_tests(Duration::from_millis(100));
+    let (up, _got) = distributor().await;
+    let (sa, ua, http, _tmp) = relay().await;
+    let tok = register(&http, &ua, &IdentityKeyPair::generate(), "goneold").await;
+    set_push(&http, &ua, &tok, &format!("{up}/gone-old")).await;
+    aqua_server::push::wake(&sa, "goneold"); // its answer comes in 0.8 s
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    set_push(&http, &ua, &tok, &format!("{up}/fresh")).await;
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    let rows = sa.directory.push_endpoints("goneold");
+    assert_eq!(rows.len(), 1, "the new registration stays");
+    assert!(rows[0].2.ends_with("/fresh"));
+    // The address that is gone, and still the current one: forgotten.
+    set_push(&http, &ua, &tok, &format!("{up}/gone-now")).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    aqua_server::push::wake(&sa, "goneold");
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    assert!(sa.directory.push_endpoints("goneold").is_empty());
+}
+

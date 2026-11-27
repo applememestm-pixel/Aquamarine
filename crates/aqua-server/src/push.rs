@@ -157,15 +157,56 @@ fn recent() -> &'static Mutex<HashMap<String, (Instant, bool)>> {
     R.get_or_init(Default::default)
 }
 
-fn http() -> &'static reqwest::Client {
-    static C: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
-    C.get_or_init(|| reqwest::Client::builder()
+/// The client every wake goes through — with its checks (no redirects, the
+/// public-only lookup). If it can't be built, no wake is sent (review of
+/// #115: a plain default client without them took its place).
+fn http() -> Option<&'static reqwest::Client> {
+    static C: std::sync::OnceLock<Option<reqwest::Client>> = std::sync::OnceLock::new();
+    C.get_or_init(|| match reqwest::Client::builder()
         .timeout(Duration::from_secs(8))
         .redirect(reqwest::redirect::Policy::none())
         .dns_resolver(std::sync::Arc::new(PublicOnly))
         .user_agent("aqua-server")
         .build()
-        .unwrap_or_default())
+    {
+        Ok(c) => Some(c),
+        Err(e) => {
+            tracing::error!(%e, "push: the wake client can't be built — no wakes are sent");
+            None
+        }
+    })
+    .as_ref()
+}
+
+/// At most this many wakes are sent at once…
+static AT_ONCE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(32);
+/// …and this many wait or run in all; past it a wake is dropped (the queue
+/// on the relay keeps the messages; the device gets them when it connects).
+static QUEUED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(4096);
+static IN_FLIGHT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+pub fn set_limits_for_tests(at_once: usize, queued: usize) {
+    AT_ONCE.store(at_once.max(1), std::sync::atomic::Ordering::SeqCst);
+    QUEUED.store(queued.max(1), std::sync::atomic::Ordering::SeqCst);
+}
+fn permits() -> &'static tokio::sync::Semaphore {
+    static S: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
+    S.get_or_init(|| tokio::sync::Semaphore::new(AT_ONCE.load(std::sync::atomic::Ordering::SeqCst)))
+}
+/// A place among the wakes waiting or running; None when they're full.
+struct Slot;
+impl Slot {
+    fn take() -> Option<Slot> {
+        let max = QUEUED.load(std::sync::atomic::Ordering::SeqCst);
+        IN_FLIGHT
+            .fetch_update(std::sync::atomic::Ordering::SeqCst, std::sync::atomic::Ordering::SeqCst, |n| (n < max).then_some(n + 1))
+            .ok()
+            .map(|_| Slot)
+    }
+}
+impl Drop for Slot {
+    fn drop(&mut self) {
+        IN_FLIGHT.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 fn is_device_of(dir: &crate::directory::Directory, user: &str, dev: &str) -> bool {
@@ -215,22 +256,43 @@ pub fn wake(state: &crate::AppState, user: &str) {
     }
     let dir = state.directory.clone();
     let user = user.to_string();
-    for ((dev, kind, endpoint), delay, key) in plan {
+    for ((dev, _, _), delay, key) in plan {
+        let Some(slot) = Slot::take() else {
+            tracing::warn!("push: too many wakes waiting — this one is dropped (the messages wait on the relay)");
+            if !delay.is_zero() {
+                let mut g = recent().lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(e) = g.get_mut(&key) { e.1 = false; }
+            }
+            continue;
+        };
         let (dir, user) = (dir.clone(), user.clone());
         tokio::spawn(async move {
+            let _slot = slot;
             if !delay.is_zero() {
                 tokio::time::sleep(delay).await;
                 let mut g = recent().lock().unwrap_or_else(|e| e.into_inner());
                 g.insert(key, (Instant::now(), false));
+            }
+            let Ok(_permit) = permits().acquire().await else { return };
+            // Where this device is woken *now* (review of #115: a held-back
+            // wake went to the address it was planned for, after the device
+            // changed it or stopped being woken), and only if it is still
+            // the account's.
+            let Some((kind, endpoint)) = dir.push_endpoint(&user, &dev) else { return };
+            if !is_device_of(&dir, &user, &dev) {
+                dir.push_unregister(&user, &dev);
+                return;
             }
             let gone = match kind.as_str() {
                 "unifiedpush" => send_unifiedpush(&endpoint).await,
                 "gateway" => send_gateway(&endpoint).await,
                 _ => false,
             };
-            // The distributor / gateway says the endpoint is no more: forget it.
+            // The distributor / gateway says this address is no more: forget
+            // it — only if it is still the one kept (a slow answer about an
+            // old address mustn't remove the new one).
             if gone {
-                dir.push_unregister(&user, &dev);
+                dir.push_unregister_if(&user, &dev, &endpoint);
             }
         });
     }
@@ -243,7 +305,8 @@ async fn send_unifiedpush(endpoint: &str) -> bool {
     if !endpoint_ok(endpoint) {
         return false;
     }
-    match http().post(endpoint).header("TTL", "86400").header("Urgency", "high").header("content-type", "application/octet-stream").body(WAKE_BODY).send().await {
+    let Some(c) = http() else { return false };
+    match c.post(endpoint).header("TTL", "86400").header("Urgency", "high").header("content-type", "application/octet-stream").body(WAKE_BODY).send().await {
         Ok(r) => matches!(r.status().as_u16(), 404 | 410),
         Err(_) => false,
     }
@@ -254,7 +317,8 @@ async fn send_unifiedpush(endpoint: &str) -> bool {
 async fn send_gateway(token: &str) -> bool {
     let Some(gw) = gateway_url() else { return false };
     let body = serde_json::json!({ "token": token, "wake": true });
-    let mut rq = http().post(format!("{gw}/v1/wake")).json(&body);
+    let Some(c) = http() else { return false };
+    let mut rq = c.post(format!("{gw}/v1/wake")).json(&body);
     // The gateway tells relays apart by the key it gave this one.
     if let Some(key) = std::env::var("AQUA_PUSH_GATEWAY_KEY").ok().filter(|k| !k.trim().is_empty()) {
         rq = rq.bearer_auth(key.trim());
