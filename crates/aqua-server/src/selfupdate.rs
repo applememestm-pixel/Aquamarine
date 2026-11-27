@@ -537,9 +537,10 @@ fn launch(c: Checked, bin: &Path) -> std::io::Error {
 fn sealed(bytes: &[u8]) -> std::io::Result<std::os::fd::OwnedFd> {
     use std::io::Write;
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-    let name = c"aqua-server";
+    // Byte strings, not c"…" literals: those need Rust 1.77 (the workspace says 1.75).
+    let name: &[u8] = b"aqua-server\0";
     // SAFETY: a valid C string; the result is checked.
-    let raw = unsafe { libc::memfd_create(name.as_ptr(), libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING) };
+    let raw = unsafe { libc::memfd_create(name.as_ptr().cast(), libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING) };
     if raw < 0 {
         return Err(std::io::Error::last_os_error());
     }
@@ -595,7 +596,7 @@ impl Exec {
     /// only on failure.
     fn run(&self, fd: libc::c_int) -> std::io::Error {
         // SAFETY: null-terminated arrays of C strings owned by `self`.
-        unsafe { libc::syscall(libc::SYS_execveat, fd, c"".as_ptr(), self.argp.as_ptr(), self.envp.as_ptr(), libc::AT_EMPTY_PATH) };
+        unsafe { libc::syscall(libc::SYS_execveat, fd, b"\0".as_ptr().cast::<libc::c_char>(), self.argp.as_ptr(), self.envp.as_ptr(), libc::AT_EMPTY_PATH) };
         std::io::Error::last_os_error()
     }
 }
