@@ -82,7 +82,7 @@ jobs:
         with:
           workspaces: . -> target
           shared-key: checks
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: stt-files
           key: stt-${{ hashFiles('crates/aqua-stt/src/files.rs') }}
