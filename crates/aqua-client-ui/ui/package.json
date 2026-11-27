@@ -11,7 +11,7 @@
     "test:unit": "esbuild tests/back.test.ts --bundle --platform=node --format=esm --outfile=tests/.out/back.test.mjs --external:*.svelte --log-level=error && node tests/.out/back.test.mjs && esbuild tests/pins.test.ts --bundle --platform=node --format=esm --outfile=tests/.out/pins.test.mjs --log-level=error && node tests/.out/pins.test.mjs && esbuild tests/history.test.ts --bundle --platform=node --format=esm --outfile=tests/.out/history.test.mjs --log-level=error && node tests/.out/history.test.mjs && esbuild tests/groupVideo.test.ts --bundle --platform=node --format=esm --outfile=tests/.out/groupVideo.test.mjs --log-level=error && node tests/.out/groupVideo.test.mjs && esbuild tests/callService.test.ts --bundle --platform=node --format=esm --outfile=tests/.out/callService.test.mjs --log-level=error && node tests/.out/callService.test.mjs"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2.0.0",
+    "@tauri-apps/api": "^2.12.5",
     "@tauri-apps/plugin-autostart": "^2.7.0",
     "@tauri-apps/plugin-biometric": "^2.5.0",
     "@tauri-apps/plugin-dialog": "^2.0.0",
