@@ -163,9 +163,15 @@ impl Replay {
             }
         }
         if g.mark_left {
-            match std::fs::remove_file(mark_of(g.path.as_deref().unwrap_or(std::path::Path::new("")))) {
+            let path = g.path.clone().unwrap_or_default();
+            let gone = match std::fs::remove_file(mark_of(&path)) {
+                Ok(()) => Ok(()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(e) => Err(e),
+            };
+            // Gone for good only once the folder is synced.
+            match gone.and_then(|()| sync_dir(&path)) {
                 Ok(()) => g.mark_left = false,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => g.mark_left = false,
                 Err(e) => {
                     tracing::error!(error = %e, "federation: the clean-stop mark of the used signatures can't be removed — signed requests refused until it is");
                     return false;
@@ -253,9 +259,8 @@ impl Inner {
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => {
-                tracing::error!(error = %e, "federation: the list of used signatures can't be read — refusing requests for ten minutes");
-                // A signature stays good from `window` before its time to `window` after.
-                self.closed_until = now + 2 * self.window;
+                tracing::error!(error = %e, "federation: the list of used signatures can't be read — refusing signed requests for a quarter of an hour");
+                self.unreadable(now);
             }
         }
         if found && !clean {
@@ -270,7 +275,7 @@ impl Inner {
         // Running now: the mark is for the next start to find, after a clean
         // stop. Can't take it away: it would say "clean" after a crash —
         // nothing is taken until it is gone (`take`).
-        if clean && std::fs::remove_file(&mark).is_err() {
+        if clean && (std::fs::remove_file(&mark).is_err() || sync_dir(&mark).is_err()) {
             self.mark_left = true;
         }
         // Drops what expired.
@@ -279,6 +284,15 @@ impl Inner {
                 tracing::warn!(error = %e, "federation: the list of used signatures wasn't compacted");
             }
         }
+    }
+
+    /// The list was there and couldn't be read: anything it held was
+    /// stamped at most `AHEAD` past now (a pass, until it expires; review:
+    /// ten minutes closed let an 11-minute pass be taken again). The floor
+    /// covers every stamp up to there.
+    fn unreadable(&mut self, now: i64) {
+        self.floor = self.floor.max(now + AHEAD + 1);
+        self.closed_until = now + AHEAD + 1;
     }
 
     fn insert(&mut self, sender: String, sig: String, ts: i64) -> bool {
@@ -348,6 +362,7 @@ impl Inner {
         }
         if self.file.is_none() {
             let mut f = append(&path)?;
+            sync_dir(&path)?;
             // The last line may have been cut short by a crash.
             f.write_all(b"\n")?;
             self.file = Some(f);
@@ -380,9 +395,28 @@ impl Inner {
         crate::fed::write_private(&tmp, &text)?;
         std::fs::File::open(&tmp)?.sync_all()?;
         std::fs::rename(&tmp, &path)?;
+        sync_dir(&path)?;
         self.lines = self.seen.len() + 1;
         Ok(())
     }
+}
+
+/// Sync the folder holding `path`: a rename, a new file or a removed one is
+/// on disk only then (a power cut could undo it — bring the clean mark back,
+/// or the old list without its floor). Not on Windows: a folder can't be
+/// opened there like this; NTFS keeps the change in its journal.
+fn sync_dir(path: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        let dir = match path.parent() {
+            Some(d) if !d.as_os_str().is_empty() => d,
+            _ => std::path::Path::new("."),
+        };
+        std::fs::File::open(dir)?.sync_all()?;
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
 }
 
 fn append(path: &std::path::Path) -> std::io::Result<std::fs::File> {
@@ -537,6 +571,29 @@ mod tests {
         let r = Replay::open(Some(file), WINDOW, 100, 100, NOW);
         assert!(!r.take("pass", "pass:lost", NOW + 660_000, NOW), "a pass of the damaged line");
         assert!(!r.take("s", "ahead", NOW + WINDOW, NOW));
+    }
+
+    /// Review of #113 (27.11, second): an unreadable list closed the table for
+    /// ten minutes, but a pass is stamped up to 11 minutes ahead — one taken
+    /// just before was good again once the ten minutes were over.
+    #[test]
+    fn an_unreadable_log_refuses_every_pass_it_may_have_held() {
+        let r = Replay::open(None, WINDOW, 100, 100, NOW);
+        r.inner.lock().unwrap().unreadable(NOW);
+        let later = NOW + 2 * WINDOW + 1;
+        assert!(!r.take("pass", "pass:before", NOW + 660_000, later), "a pass of before the start, after ten minutes");
+        let after = NOW + super::AHEAD + 1;
+        assert!(r.take("s", "fresh", after, after), "stamped after anything the list could hold: fine");
+    }
+
+    /// Review of #113 (second): the directory is synced after a rename and
+    /// after the clean mark is removed (a power cut could bring the mark
+    /// back, and with it "clean" after a crash). The power cut itself can't
+    /// be made here; this checks the call works on this file system.
+    #[test]
+    fn syncing_the_directory_works() {
+        let dir = tempfile::tempdir().unwrap();
+        super::sync_dir(&dir.path().join("seen.log")).unwrap();
     }
 
     /// Nothing is taken stamped further ahead than a pass can be: such an
