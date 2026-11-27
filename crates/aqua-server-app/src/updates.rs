@@ -48,7 +48,8 @@ fn tester() -> bool {
 }
 static BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// What `install` will open / run.
-static FILE: Mutex<Option<(PathBuf, String, String)>> = Mutex::new(None);
+/// (file, address, SHA-256, version).
+static FILE: Mutex<Option<(PathBuf, String, String, String)>> = Mutex::new(None);
 
 fn set(f: impl FnOnce(&mut UpdState)) {
     if let Ok(mut g) = STATE.lock() {
@@ -176,7 +177,7 @@ async fn find_web(c: &reqwest::Client) -> Result<Option<Found>, String> {
         .filter_map(|l| l.rsplit_once("/releases/tag/v").map(|(_, v)| v.to_string()))
         .filter(|v| v.chars().next().is_some_and(|c| c.is_ascii_digit()))
         // The page doesn't say which are pre-releases: those are "X.Y.Z-N".
-        .filter(|v| tester() || !v.contains('-'))
+        .filter(|v| aqua_server::release::channel_allows(v, tester()))
         .reduce(|a, b| if newer(&b, &a) { b } else { a });
     let Some(version) = best else { return Ok(None) };
     if !newer(&version, cur) {
@@ -229,18 +230,23 @@ async fn find_api(c: &reqwest::Client) -> Result<Option<Found>, String> {
 
 /// The newest release in a list (the API's, or the feed's — whose releases
 /// also carry `sums`, the text of SHA256SUMS.txt) if it's newer than this app.
-async fn pick(c: &reqwest::Client, list: &serde_json::Value) -> Result<Option<Found>, String> {
-    let cur = env!("CARGO_PKG_VERSION");
-    let best = list
-        .as_array()
+/// The highest release of the list this channel may install. Pre-release
+/// or not is told by the version (signed), not by the list's flag.
+fn best(list: &serde_json::Value, tester: bool) -> Option<(String, &serde_json::Value)> {
+    list.as_array()
         .into_iter()
         .flatten()
         .filter(|r| !r["draft"].as_bool().unwrap_or(false))
-        .filter(|r| tester() || !r["prerelease"].as_bool().unwrap_or(false))
+        .filter(|r| tester || !r["prerelease"].as_bool().unwrap_or(false))
         .filter_map(|r| Some((r["tag_name"].as_str()?.strip_prefix('v')?.to_string(), r)))
         .filter(|(v, _)| v.chars().next().is_some_and(|c| c.is_ascii_digit()))
-        .reduce(|a, b| if newer(&b.0, &a.0) { b } else { a });
-    let Some((version, rel)) = best else { return Ok(None) };
+        .filter(|(v, _)| aqua_server::release::channel_allows(v, tester))
+        .reduce(|a, b| if newer(&b.0, &a.0) { b } else { a })
+}
+
+async fn pick(c: &reqwest::Client, list: &serde_json::Value) -> Result<Option<Found>, String> {
+    let cur = env!("CARGO_PKG_VERSION");
+    let Some((version, rel)) = best(list, tester()) else { return Ok(None) };
     if !newer(&version, cur) {
         return Ok(None);
     }
@@ -406,22 +412,22 @@ async fn pass(app: &AppHandle, install: bool) -> std::time::Duration {
         set(|s| s.state = "waiting".into());
         return SOON;
     };
-    if cfg!(target_os = "android") {
-        // Android installs an APK only through the system: the window offers it.
-        if let Ok(mut g) = FILE.lock() {
-            *g = Some((PathBuf::new(), url, sha));
-        }
-        set(|s| s.state = "ready".into());
-        return EVERY;
-    }
+    // Android too: downloaded here and checked against the signed sums
+    // (review of F: the browser fetched it and nothing here checked it —
+    // Android's own signature check doesn't cover a first install or the
+    // channel); the system installer then gets this very file.
     let path = match download(app, &c, &name, &url, size, &sha).await {
         Ok(p) => p,
         Err(e) => return fail(e),
     };
     if let Ok(mut g) = FILE.lock() {
-        *g = Some((path, url, sha));
+        *g = Some((path, url, sha, f.version.clone()));
     }
     set(|s| s.state = "ready".into());
+    if cfg!(target_os = "android") {
+        // Android installs an APK only when the person agrees: the window offers it.
+        return EVERY;
+    }
     if install && can_self_install() {
         if let Err(e) = install_now(app) {
             return fail(e);
@@ -432,9 +438,14 @@ async fn pass(app: &AppHandle, install: bool) -> std::time::Duration {
 
 /// Put the downloaded file in place (or open it where that's all we can do).
 pub fn install_now(app: &AppHandle) -> Result<(), String> {
-    let (path, url, sha) = FILE.lock().ok().and_then(|g| g.clone()).ok_or("nothing downloaded yet")?;
-    // Still the bytes that were checked (Android only opens the address).
-    if !cfg!(target_os = "android") && file_sha256(&path).as_deref() != Some(sha.as_str()) {
+    let (path, url, sha, version) = FILE.lock().ok().and_then(|g| g.clone()).ok_or("nothing downloaded yet")?;
+    // The channel again, right before installing ("Tester" switched off
+    // since the download: a pre-release isn't installed).
+    if !aqua_server::release::channel_allows(&version, tester()) {
+        return Err("this update is a pre-release, and Tester is off".into());
+    }
+    // Still the bytes that were checked.
+    if file_sha256(&path).as_deref() != Some(sha.as_str()) {
         return Err("the downloaded update changed on disk — check for updates again".into());
     }
     set(|s| s.state = "installing".into());
@@ -444,9 +455,13 @@ pub fn install_now(app: &AppHandle) -> Result<(), String> {
     let hidden = false;
     #[cfg(target_os = "android")]
     {
-        let _ = (&path, hidden);
-        use tauri_plugin_opener::OpenerExt;
-        return app.opener().open_url(url.as_str(), None::<&str>).map_err(|e| e.to_string());
+        let _ = (&url, hidden, app);
+        let r = crate::android::install_apk(&path)?;
+        if r["needsPermission"].as_bool().unwrap_or(false) {
+            set(|s| s.state = "ready".into());
+            return Err("allow installing apps from Aquamarine Server in the system settings, then press Install again".into());
+        }
+        return Ok(());
     }
     #[cfg(target_os = "windows")]
     {
@@ -524,6 +539,13 @@ pub fn spawn(app: AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::newer;
+
+    #[test]
+    fn a_pre_release_marked_stable_is_not_for_everyone() {
+        let list = serde_json::json!([{ "tag_name": "v9.9.0-1", "prerelease": false }, { "tag_name": "v9.8.1", "prerelease": false }]);
+        assert_eq!(super::best(&list, false).map(|b| b.0).as_deref(), Some("9.8.1"));
+        assert_eq!(super::best(&list, true).map(|b| b.0).as_deref(), Some("9.9.0-1"));
+    }
 
     #[test]
     fn numbering() {

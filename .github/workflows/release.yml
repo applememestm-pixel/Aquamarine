@@ -373,7 +373,7 @@ jobs:
           act="$(find gen/android/app/src/main/java -name MainActivity.kt | head -1)"
           cp android/AquaServer.kt "$(dirname "$act")/AquaServer.kt"
           cp -r icons/android/* gen/android/app/src/main/res/
-          perms='<uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />\n    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />\n    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />\n    <uses-permission android:name="android.permission.WAKE_LOCK" />\n    <application'
+          perms='<uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />\n    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />\n    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />\n    <uses-permission android:name="android.permission.WAKE_LOCK" />\n    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />\n    <application'
           sed -i "0,/<application/s##${perms}#" "$m"
           svc='<service android:name=".AquaServerService" android:exported="false" android:foregroundServiceType="specialUse"><property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="Hosts the Aquamarine relay server for the user and their contacts" /></service>\n    </application>'
           sed -i "s#</application>#${svc}#" "$m"
@@ -835,6 +835,7 @@ jobs:
     needs: [notes, server]
     runs-on: ubuntu-latest
     permissions:
+      contents: write
       packages: write
     steps:
       - uses: actions/checkout@v4
@@ -867,12 +868,26 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
       - uses: docker/build-push-action@v6
+        id: build
         with:
           context: .
           file: docker/relay-bin.Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
+      # AQUA-SEC-012: the image by its digest, in a release file the signed
+      # SHA256SUMS.txt lists (the checksums job waits for it). A tag can be
+      # moved; this names exactly what was built here.
+      - name: Image digest into the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          img="ghcr.io/$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')/aquamarine-server"
+          echo "$DIGEST" | grep -qE '^sha256:[0-9a-f]{64}$' || { echo "::error::no image digest"; exit 1; }
+          printf '%s@%s\n' "$img" "$DIGEST" > IMAGE-server.txt
+          cat IMAGE-server.txt
+          gh release upload "$REL_TAG" IMAGE-server.txt --repo "$GITHUB_REPOSITORY" --clobber
 
   # ---------------------------------------------------------------- site
   # The website as aquamarine-site.tar.gz (pages + Markdown documents) —
@@ -921,11 +936,23 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
       - uses: docker/build-push-action@v6
+        id: build
         with:
           context: .
           platforms: linux/amd64,linux/arm64,linux/arm/v7
           push: true
           tags: ${{ steps.meta.outputs.tags }}
+      # The image by its digest, in a signed release file (as relay-image).
+      - name: Image digest into the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          img="ghcr.io/$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')/aquamarine-site"
+          echo "$DIGEST" | grep -qE '^sha256:[0-9a-f]{64}$' || { echo "::error::no image digest"; exit 1; }
+          printf '%s@%s\n' "$img" "$DIGEST" > IMAGE-site.txt
+          cat IMAGE-site.txt
+          gh release upload "$REL_TAG" IMAGE-site.txt --repo "$GITHUB_REPOSITORY" --clobber
 
   # ---------------------------------------------------------------- checksums
   # SHA256SUMS.txt for every file attached to the release, so a download
@@ -933,7 +960,7 @@ jobs:
   checksums:
     name: checksums
     if: ${{ always() && needs.notes.result == 'success' }}
-    needs: [notes, desktop, android, ios, server, server-app, server-app-android, site]
+    needs: [notes, desktop, android, ios, server, server-app, server-app-android, site, relay-image]
     runs-on: ubuntu-latest
     steps:
       # tools/release-sign.sh only (the signing step below).
@@ -996,3 +1023,6 @@ jobs:
           fi
           bash "$GITHUB_WORKSPACE/tools/release-sign.sh" sign ../SHA256SUMS.txt ../SHA256SUMS.txt.sig
           gh release upload "$TAG" ../SHA256SUMS.txt.sig --repo "$GITHUB_REPOSITORY" --clobber
+          # The site's updates.json lists a release only once it is signed
+          # (tools/updates_feed.py): build it again now, not at the next run.
+          gh workflow run pages.yml --repo "$GITHUB_REPOSITORY" --ref main || echo "::warning::pages.yml not started — updates.json gets this release at its next run"

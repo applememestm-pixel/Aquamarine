@@ -340,6 +340,11 @@ const RU_DICT = {
   "Connection": "Подключение",
   "Change": "Изменить",
   "Host key": "Ключ машины",
+  "Is this your machine?": "Это ваша машина?",
+  "Cancel": "Отмена",
+  "hostKeyFirst": "Первое подключение к {h}. Пароль и ключ ещё не отправлены. Сверьте отпечаток ключа машины с тем, что она показывает сама, — так подменить машину по дороге не выйдет.",
+  "hostKeyHow": "На самой машине: ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub (или другой файл ssh_host_*_key.pub). Совпадает — подключайтесь; не совпадает — не подключайтесь.",
+  "It matches — connect": "Совпадает — подключиться",
   "The password / key is kept on this device.": "Пароль / ключ хранится на этом устройстве.",
   "The password / key is kept only until the app quits.": "Пароль / ключ хранится только до закрытия приложения.",
   "Restart the server": "Перезапустить сервер",
@@ -501,6 +506,8 @@ const EN = {
   starsNote: "The CeZeOs star is a mark only the project owner hands out: levels 1–5 for donations (Boosty, given on their own), level 6 above them by hand («/name level 6» to the bot). Only the owner's server has the key. Make it once there: the public key goes into the apps (repository variable AQUA_STAR_PUBLIC); stars are given by the @stars bot.",
   remoteIntro: "An Aquamarine server on another machine (a VPS, a home PC): the app signs in there over SSH and opens its panel here. The panel is never opened to the internet — everything goes inside SSH.",
   remoteManual: "The app reads the panel's port and token by itself from panel.json on that machine (the running server writes it). In Docker the file is inside the container — then enter the container's port and AQUA_ADMIN_TOKEN.",
+  hostKeyFirst: "First connection to {h}. No password or key has been sent yet. Compare the machine's key fingerprint with what the machine itself shows — then no one can pose as it on the way.",
+  hostKeyHow: "On the machine itself: ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub (or another ssh_host_*_key.pub). Matches — connect; doesn't — don't.",
   chooseLead: "How will you use it?",
   chooseLocal: "This computer or phone becomes the server: accounts and files are kept here.",
   chooseRemote: "The server already runs on another machine (a VPS, a home PC) — manage it from here over SSH. No server starts here.",
@@ -1567,7 +1574,7 @@ async function connectRemote(on) {
   if (!on) { remotes = await invoke("remote_disconnect", { id: r.id }).catch(() => remotes); await poll(true); render(); return; }
   if (!r.has_secret) return openRemote(r.id, true);
   busy = true; r.state = "connecting"; st = remoteSt(r); paintAll(); paintBar();
-  try { await invoke("remote_connect", { id: r.id }); } catch (e) { toast(errText(e)); }
+  try { await invoke("remote_connect", { id: r.id }); } catch (e) { busy = false; if (askHostKey(r.id, e)) return; toast(errText(e)); }
   busy = false;
   await poll(true); render();
 }
@@ -1620,7 +1627,31 @@ async function saveRemote(id) {
   remotes = await invoke("remote_list").catch(() => remotes);
   target = nid; try { localStorage.setItem("aqs.target", nid); } catch {}
   stats = null; fed = null; hostAt = 0; rupd = null;
-  try { await invoke("remote_connect", { id: nid }); } catch (e) { await poll(true); render(); return setMsg("rMsg", esc(errText(e)), "err"); }
+  try { await invoke("remote_connect", { id: nid }); } catch (e) { if (askHostKey(nid, e)) return; await poll(true); render(); return setMsg("rMsg", esc(errText(e)), "err"); }
+  closeModal(); await poll(true); render();
+}
+// First connection (review of F, 27.11): the machine's SSH key is shown
+// before any password or key is sent; it is kept only once confirmed, and a
+// different one later is refused. True when this is that question.
+const CONFIRM_KEY = "confirm-host-key:";
+function askHostKey(id, e) {
+  const m = String(e?.message || e || "");
+  if (!m.startsWith(CONFIRM_KEY)) return false;
+  const fp = m.slice(CONFIRM_KEY.length);
+  const r = remotes.find((x) => x.id === id) || {};
+  modal(`<h3><span>${t("Is this your machine?")}</span><button class="ghost mini" onclick="closeModal()">${IC.x}</button></h3>
+    <div class="note">${t("hostKeyFirst", { h: esc((r.user ? r.user + "@" : "") + (r.host || "")) })}</div>
+    <div class="addr"><span class="k">SHA256</span><code id="hkFp">${esc(fp)}</code></div>
+    <div class="note">${t("hostKeyHow")}</div>
+    <div class="row"><button class="primary" onclick="trustHostKey('${esc(id)}')">${IC.server}${t("It matches — connect")}</button>
+      <button onclick="closeModal()">${t("Cancel")}</button><span class="msg" id="hkMsg"></span></div>`);
+  return true;
+}
+async function trustHostKey(id) {
+  const fp = $("hkFp").textContent;
+  try { await invoke("remote_trust", { id, fingerprint: fp }); } catch (e) { return setMsg("hkMsg", esc(errText(e)), "err"); }
+  setMsg("hkMsg", t("Connecting…"));
+  try { await invoke("remote_connect", { id }); } catch (e) { return setMsg("hkMsg", esc(errText(e)), "err"); }
   closeModal(); await poll(true); render();
 }
 async function delRemote(id) {

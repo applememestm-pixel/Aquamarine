@@ -6,8 +6,49 @@ use std::net::SocketAddr;
 use aqua_server::{app, lan_ip, AppState};
 use nu_ansi_term::{Color, Style};
 
+/// What the command line asks for before anything starts: the version, the
+/// help, or an option this binary doesn't know (review 27.11: `--version`
+/// started a whole server — a database, a TURN secret — in the folder it was
+/// run from). `None`: go on and run.
+fn early_exit(args: &[String]) -> Option<(i32, String)> {
+    let mut it = args.iter().skip(1);
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "-V" | "--version" | "version" => return Some((0, format!("aqua-server {}", env!("CARGO_PKG_VERSION")))),
+            "-h" | "--help" | "help" => return Some((0, HELP.trim_end().to_string())),
+            "--data" => {
+                if it.next().is_none() {
+                    return Some((2, "aqua-server: --data needs a folder".into()));
+                }
+            }
+            "star-key" => {}
+            x if x.starts_with("--data=") => {}
+            x => return Some((2, format!("aqua-server: unknown option {x:?} — see aqua-server --help"))),
+        }
+    }
+    None
+}
+
+const HELP: &str = "\
+aqua-server — the Aquamarine relay
+
+Usage:
+  aqua-server [--data <folder>]   run the relay (data in <folder>, or AQUA_DATA)
+  aqua-server star-key            make this relay the one that hands out stars
+  aqua-server --version           print the version
+  aqua-server --help              this text
+
+Settings are environment variables (AQUA_LISTEN, AQUA_ADMIN_TOKEN, AQUA_UPDATES, …):
+see docs/self-hosting.md.
+";
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    if let Some((code, text)) = early_exit(&args) {
+        if code == 0 { println!("{text}") } else { eprintln!("{text}") }
+        std::process::exit(code);
+    }
     // Old Windows consoles print ANSI colour codes as garbage ("←[2m…");
     // turn on VT processing, or fall back to plain logs.
     #[cfg(windows)]
@@ -171,5 +212,30 @@ fn open_in_browser(url: &str) {
     let r = std::process::Command::new("xdg-open").arg(url).spawn();
     if let Err(e) = r {
         tracing::warn!(error = %e, "could not open the admin panel in a browser");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::early_exit;
+
+    fn run(a: &[&str]) -> Option<i32> {
+        let mut v = vec!["aqua-server".to_string()];
+        v.extend(a.iter().map(|s| s.to_string()));
+        early_exit(&v).map(|(c, _)| c)
+    }
+
+    /// --version / --help / a typo end before any folder, database or secret.
+    #[test]
+    fn options_that_start_nothing() {
+        assert_eq!(run(&["--version"]), Some(0));
+        assert!(early_exit(&["x".into(), "-V".into()]).unwrap().1.contains(env!("CARGO_PKG_VERSION")));
+        assert_eq!(run(&["--help"]), Some(0));
+        assert_eq!(run(&["--verison"]), Some(2), "a typo doesn't start a server");
+        assert_eq!(run(&["--data"]), Some(2));
+        assert_eq!(run(&[]), None);
+        assert_eq!(run(&["--data", "/srv/aqua"]), None);
+        assert_eq!(run(&["--data=/srv/aqua"]), None);
+        assert_eq!(run(&["star-key"]), None);
     }
 }
