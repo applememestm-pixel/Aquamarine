@@ -42,6 +42,30 @@ aqua-fed-seen.tmp
 *.key
 # Who came online / signed in (admin panel journal)
 aqua-journal.log
+# Everything else the relay writes into its data folder (a run from a
+# checkout puts it here). Secrets among them: the TURN secret, the Telegram
+# bot token, the Boosty login cookie, the Navidrome login (review 27.11:
+# aqua-turn.secret was left untracked, not ignored).
+aqua-*.secret
+aqua-*.log
+aqua-*.lock
+aqua-*.clean
+aqua-*.tmp
+aqua-telegram.json
+aqua-telegram-net.json
+aqua-tg-webhooks.json
+aqua-boosty-auth.json
+aqua-boosty-links.json
+aqua-navidrome.json
+aqua-updates.json
+aqua-quota-over.json
+aqua-pack-rules.json
+aqua-games.json
+aqua-bot-specs.json
+aqua-blobs/
+aqua-update/
+aqua-packs/
+panel.json
 proxy.txt
 /.data-*
 /Aquamarine-apps/

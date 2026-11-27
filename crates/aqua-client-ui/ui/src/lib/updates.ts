@@ -28,7 +28,7 @@ updatePrefs.subscribe((p) => { try { localStorage.setItem(KEY, JSON.stringify(p)
 /** "nightly" is the Rust side's name for "every numbered build". */
 const channelOf = (p: Prefs): Channel => (p.tester ? "nightly" : "stable");
 
-export interface UpdateAsset { name: string; url: string; size: number; sha256: string | null }
+export interface UpdateAsset { name: string; url: string; size: number; sha256: string | null; version?: string }
 export interface UpdateInfo {
   tag: string; name: string; commit: string | null; version: string | null;
   published_at: string; notes: string; html_url: string; asset: UpdateAsset | null;
@@ -120,7 +120,7 @@ export async function installUpdate(): Promise<void> {
       try { path = await invoke<string>("update_download", { asset }); } finally { un(); }
     }
     updateState.set({ s: "installing", info, id });
-    const r = await invoke<string>("update_install", { path });
+    const r = await invoke<string>("update_install", { path, channel: channelOf(get(updatePrefs)) });
     // Android: installs from the app need a one-time "allow" in system settings.
     if (r === "permission") updateState.set({ s: "permission", info, id, path });
     // Android: the new build is signed with another key — it can't go over

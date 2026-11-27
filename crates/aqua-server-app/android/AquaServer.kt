@@ -16,10 +16,14 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.net.Uri
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.provider.Settings
+import androidx.core.content.FileProvider
+import java.io.File
 import app.tauri.annotation.Command
 import app.tauri.annotation.InvokeArg
 import app.tauri.annotation.TauriPlugin
@@ -30,6 +34,11 @@ import app.tauri.plugin.Plugin
 @InvokeArg
 class ServerArgs {
   var port: Int = 7777
+}
+
+@InvokeArg
+class InstallArgs {
+  var path: String = ""
 }
 
 @TauriPlugin
@@ -44,6 +53,35 @@ class AquaServerPlugin(private val activity: Activity) : Plugin(activity) {
     val i = Intent(activity, AquaServerService::class.java).putExtra("port", args.port)
     if (Build.VERSION.SDK_INT >= 26) activity.startForegroundService(i) else activity.startService(i)
     invoke.resolve(JSObject().put("ok", true))
+  }
+
+  /** Updates (updates.rs): the APK downloaded here and checked against the
+   *  signed sums goes to the system installer through the app's
+   *  FileProvider (cache dir) — not a browser download nobody checked.
+   *  Android asks once to allow installs from this app. */
+  @Command
+  fun install(invoke: Invoke) {
+    val args = invoke.parseArgs(InstallArgs::class.java)
+    if (Build.VERSION.SDK_INT >= 26 && !activity.packageManager.canRequestPackageInstalls()) {
+      activity.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + activity.packageName)))
+      invoke.resolve(JSObject().put("needsPermission", true))
+      return
+    }
+    try {
+      val f = File(args.path)
+      if (!f.canonicalPath.startsWith(activity.cacheDir.canonicalPath + File.separator)) {
+        invoke.reject("not a downloaded update")
+        return
+      }
+      val uri = FileProvider.getUriForFile(activity, activity.packageName + ".fileprovider", f)
+      val i = Intent(Intent.ACTION_VIEW)
+        .setDataAndType(uri, "application/vnd.android.package-archive")
+        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+      activity.startActivity(i)
+      invoke.resolve(JSObject().put("started", true))
+    } catch (e: Exception) {
+      invoke.reject(e.message ?: "install")
+    }
   }
 
   @Command

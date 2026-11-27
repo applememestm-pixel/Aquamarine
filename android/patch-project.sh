@@ -100,6 +100,15 @@ if ! grep -q AquaCallService "$M"; then
     </application>' perl -0pi -e 's#</application>#$ENV{AQ_CAS}#' "$M"
   echo '[patch] call service and boot reminder added'
 fi
+# Waking through UnifiedPush (AquaRelay.kt: AquaPush, AquaPushReceiver): the
+# distributor app sends to the receiver; <queries> lets us find it (Android 11+).
+if ! grep -q AquaPushReceiver "$M"; then
+  AQ_UPQ='<queries><intent><action android:name="org.unifiedpush.android.distributor.REGISTER" /></intent></queries>
+    ' perl -0pi -e 's/<application/$ENV{AQ_UPQ}<application/' "$M"
+  AQ_UPR='<receiver android:name=".AquaPushReceiver" android:exported="true"><intent-filter><action android:name="org.unifiedpush.android.connector.NEW_ENDPOINT" /><action android:name="org.unifiedpush.android.connector.MESSAGE" /><action android:name="org.unifiedpush.android.connector.UNREGISTERED" /><action android:name="org.unifiedpush.android.connector.REGISTRATION_FAILED" /></intent-filter></receiver>
+    </application>' perl -0pi -e 's#</application>#$ENV{AQ_UPR}#' "$M"
+  echo '[patch] UnifiedPush receiver added'
+fi
 # 1c'''. Home-screen widget (android/widget).
 if [ -n "$MA" ]; then
   cp -f "$HERE/widget/AquaWidget.kt" "$(dirname "$MA")/AquaWidget.kt"

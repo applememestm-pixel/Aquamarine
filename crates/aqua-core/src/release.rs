@@ -69,6 +69,29 @@ pub fn sums_trusted_for(sums: &str, sig_hex: Option<&str>, version: &str) -> boo
     sums_trusted(sums, sig_hex) && sums_name_version(sums, version)
 }
 
+/// May a build on this channel install release `version`? Pre-releases
+/// ("X.Y.Z-N") only for testers (owner). Decided from the version — which
+/// the signed sums name (`sums_trusted_for`) — never from the feed's own
+/// `prerelease` flag or `stable` key: whoever answers instead of the feed
+/// (the site's domain, a mirror) set those, and handed a signed pre-release
+/// to everyone (review of 1.21.0-25).
+pub fn channel_allows(version: &str, tester: bool) -> bool {
+    version_ok(version) && (tester || !version.contains('-'))
+}
+
+/// A version of this project, strictly: `X.Y.Z` or `X.Y.Z-N`, digits only,
+/// no leading zeros, no spaces (review of F: "1.2.3-rc1", "1.2.3-4-5",
+/// " 1.2.3" were compared by `newer` as if they were numbers).
+pub fn version_ok(version: &str) -> bool {
+    let (main, pre) = match version.split_once('-') {
+        Some((m, p)) => (m, Some(p)),
+        None => (version, None),
+    };
+    let num = |s: &str| !s.is_empty() && s.len() <= 9 && s.bytes().all(|b| b.is_ascii_digit()) && (s == "0" || !s.starts_with('0'));
+    let parts: Vec<&str> = main.split('.').collect();
+    parts.len() == 3 && parts.iter().all(|p| num(p)) && pre.map_or(true, num)
+}
+
 /// Release downloads come only from this repository's release pages.
 pub const DOWNLOAD_PREFIX: &str = "https://github.com/applememestm-pixel/Aquamarine/releases/download/";
 
@@ -90,6 +113,24 @@ mod tests {
         assert!(!sums_trusted_with(Some(&pk), "bbbb  app.exe\n", Some(&sig)), "changed text");
         let other = hex::encode(SignSecret::generate().sign(sums.as_bytes()));
         assert!(!sums_trusted_with(Some(&pk), sums, Some(&other)), "another key");
+    }
+
+    #[test]
+    fn versions_are_strict() {
+        for good in ["1.21.0", "1.21.0-25", "0.1.1", "1.20.11"] {
+            assert!(version_ok(good), "{good}");
+        }
+        for bad in ["1.21", "1.21.0.1", "1.21.0-rc1", "1.21.0-25-1", " 1.21.0", "1.21.0 ", "01.2.3", "1.2.3-", "v1.2.3", "1.2.3-07", "", "1..3", "99999999999.0.0"] {
+            assert!(!version_ok(bad), "{bad}");
+            assert!(!channel_allows(bad, true), "{bad}");
+        }
+    }
+
+    #[test]
+    fn pre_releases_only_for_testers() {
+        assert!(channel_allows("1.21.1", false));
+        assert!(!channel_allows("1.21.0-25", false));
+        assert!(channel_allows("1.21.0-25", true));
     }
 
     /// The line release.yml writes: `printf '%s' "$version" > VERSION`.

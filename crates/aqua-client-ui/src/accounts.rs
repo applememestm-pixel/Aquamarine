@@ -104,6 +104,11 @@ pub struct AccountSlot {
     pub has_keys: bool,
 }
 
+/// The account slot the app runs as ("main" when there's only one).
+pub fn active_slot(app: &AppHandle) -> String {
+    base_of(app).map(|b| active(&b)).unwrap_or_else(|_| "main".into())
+}
+
 fn base_of(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(app.try_state::<Base>().ok_or("accounts unavailable")?.0.clone())
 }

@@ -27,9 +27,12 @@ function notifyIncoming(peerId: string, preview: string) {
   if (IS_MOBILE) return;
   const c = get(chats).find((x) => x.id === peerId);
   const hidden = get(locked) || !!get(chatLocks)[peerId];
-  const title = hidden || s.notifyPreview === "none" ? "Aquamarine" : displayName(peerId, c?.name || peerId);
+  // By default only "New message" (review of #113): text and sender are
+  // shown when the person chooses so in Settings → Notifications.
+  const mode = s.notifyPreview ?? "none";
+  const title = hidden || mode === "none" ? "Aquamarine" : displayName(peerId, c?.name || peerId);
   const body = hidden ? tr("New message in a locked chat")
-    : s.notifyPreview === "none" || s.notifyPreview === "sender" ? tr("New message")
+    : mode === "none" || mode === "sender" ? tr("New message")
     : preview.trim() || tr("New message");
   void osNotify(title, body, peerId);
 }

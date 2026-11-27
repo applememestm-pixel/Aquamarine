@@ -591,6 +591,12 @@ mod android {
             .build()
     }
 
+    /// Hand a downloaded, checked APK to the system installer (AquaServer.kt).
+    pub fn install_apk(path: &std::path::Path) -> Result<serde_json::Value, String> {
+        let h = HANDLE.get().ok_or("the Android plugin isn't loaded")?;
+        h.run_mobile_plugin::<serde_json::Value>("install", serde_json::json!({ "path": path.to_string_lossy() })).map_err(|e| e.to_string())
+    }
+
     pub fn keep_alive(on: bool, port: u16) {
         let Some(h) = HANDLE.get() else { return };
         let cmd = if on { "start" } else { "stop" };
@@ -661,7 +667,7 @@ pub fn run() {
                 }
             }
         })
-        .invoke_handler(tauri::generate_handler![status, start, stop, set_port, set_dir, pick_dir, set_autostart, set_tray, open_guide, admin, update_status, set_tester, update_now, open_notes, choose_mode, remote::remote_list, remote::remote_save, remote::remote_delete, remote::remote_connect, remote::remote_disconnect])
+        .invoke_handler(tauri::generate_handler![status, start, stop, set_port, set_dir, pick_dir, set_autostart, set_tray, open_guide, admin, update_status, set_tester, update_now, open_notes, choose_mode, remote::remote_list, remote::remote_save, remote::remote_delete, remote::remote_connect, remote::remote_disconnect, remote::remote_trust])
         .build(tauri::generate_context!());
     match res {
         // Quitting keeps the server's files (aqua_server::blobstore: they go

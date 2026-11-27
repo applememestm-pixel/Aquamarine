@@ -95,6 +95,16 @@ class WidgetArgs {
 
 /** ksWrap: the vault master key (hex) to wrap. */
 @InvokeArg
+class PushArgs {
+  /** Whose: the account slot on this phone (each has its own token and
+   *  endpoint — two accounts' relays can't tell they are one phone). */
+  var instance: String = "main"
+  var on: Boolean = false
+  /** The notification text, in the UI language ("New message"). */
+  var text: String? = null
+}
+
+@InvokeArg
 class KsWrapArgs {
   var key: String = ""
 }
@@ -293,6 +303,39 @@ class AquaRelayPlugin(private val activity: Activity) : Plugin(activity) {
     } catch (e: Exception) {
       invoke.reject(e.message ?: "can't start")
     }
+  }
+
+  /** Waking through UnifiedPush (AquaPush): register with the distributor
+   *  installed on this phone (ntfy, NextPush… — no Google), or stop. */
+  @Command
+  fun pushSet(invoke: Invoke) {
+    val a = invoke.parseArgs(PushArgs::class.java)
+    a.text?.let { AquaPush.setText(activity, it) }
+    if (a.on) {
+      if (Build.VERSION.SDK_INT >= 33 &&
+        activity.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+        activity.requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 7794)
+      }
+      val d = AquaPush.register(activity, a.instance)
+      invoke.resolve(JSObject().put("distributor", d ?: "").put("ok", d != null))
+    } else {
+      AquaPush.unregister(activity, a.instance)
+      invoke.resolve(JSObject().put("ok", true))
+    }
+  }
+
+  /** Where this phone is woken (the endpoint the distributor gave), and
+   *  which distributors are installed. */
+  @Command
+  fun pushState(invoke: Invoke) {
+    val a = invoke.parseArgs(PushArgs::class.java)
+    val list = JSArray()
+    AquaPush.distributors(activity).forEach { list.put(it) }
+    invoke.resolve(JSObject()
+      .put("on", AquaPush.on(activity, a.instance))
+      .put("endpoint", AquaPush.endpoint(activity, a.instance) ?: "")
+      .put("distributor", AquaPush.distributor(activity) ?: "")
+      .put("distributors", list))
   }
 
   @Command
@@ -825,5 +868,137 @@ class AquaUpdatePlugin(private val activity: Activity) : Plugin(activity) {
     } else @Suppress("DEPRECATION") info.signatures
     val md = java.security.MessageDigest.getInstance("SHA-256")
     return (sigs ?: emptyArray()).map { md.digest(it.toByteArray()).joinToString("") { b -> "%02x".format(b) } }.toSet()
+  }
+}
+
+/** UnifiedPush (https://unifiedpush.org, Android spec AND_3), without a
+ *  library: the distributor app the person chose (ntfy, NextPush…) holds the
+ *  one connection; the relay posts a fixed "wake up" to the endpoint it gives
+ *  (aqua-server push.rs). Nothing of a message is in it. Every intent from a
+ *  distributor carries the random token we registered with — one without it
+ *  (another app) is ignored, so no one else can set where we are woken. */
+object AquaPush {
+  private const val FILE = "aqua_push"
+  const val REGISTER = "org.unifiedpush.android.distributor.REGISTER"
+  const val UNREGISTER = "org.unifiedpush.android.distributor.UNREGISTER"
+  const val ACK = "org.unifiedpush.android.distributor.MESSAGE_ACK"
+
+  private fun prefs(c: Context) = c.getSharedPreferences(FILE, Context.MODE_PRIVATE)
+  private fun safe(i: String) = i.filter { it.isLetterOrDigit() || it == '-' || it == '_' }.take(32).ifEmpty { "main" }
+  fun on(c: Context, i: String) = prefs(c).getBoolean("on:" + safe(i), false)
+  fun endpoint(c: Context, i: String): String? = prefs(c).getString("endpoint:" + safe(i), null)
+  fun distributor(c: Context): String? = prefs(c).getString("distributor", null)
+  fun token(c: Context, i: String): String? = prefs(c).getString("token:" + safe(i), null)
+  fun setText(c: Context, t: String) = prefs(c).edit().putString("text", t).apply()
+  fun text(c: Context): String = prefs(c).getString("text", null) ?: "New message"
+  fun setEndpoint(c: Context, i: String, e: String?) = prefs(c).edit().putString("endpoint:" + safe(i), e).apply()
+  /** The account slot a distributor's token belongs to (null: not ours). */
+  fun instanceOf(c: Context, token: String?): String? {
+    if (token.isNullOrEmpty()) return null
+    return prefs(c).all.entries.firstOrNull { it.key.startsWith("token:") && it.value == token }?.key?.removePrefix("token:")
+  }
+
+  /** Installed distributors (package names). */
+  fun distributors(c: Context): List<String> {
+    val pm = c.packageManager
+    val found = if (Build.VERSION.SDK_INT >= 33) {
+      pm.queryBroadcastReceivers(Intent(REGISTER), PackageManager.ResolveInfoFlags.of(PackageManager.GET_RESOLVED_FILTER.toLong()))
+    } else {
+      @Suppress("DEPRECATION") pm.queryBroadcastReceivers(Intent(REGISTER), PackageManager.GET_RESOLVED_FILTER)
+    }
+    return found.mapNotNull { it.activityInfo?.packageName }.filter { it != c.packageName }.distinct()
+  }
+
+  /** Identifies this app to the distributor (AND_3: it reads the creator). */
+  private fun pi(c: Context): PendingIntent =
+    PendingIntent.getBroadcast(c, 0, Intent("org.unifiedpush.android.connector.AUTH").setPackage(c.packageName), PendingIntent.FLAG_IMMUTABLE)
+
+  /** Register with the chosen (or the only / first) distributor; null when
+   *  none is installed. The endpoint comes later (AquaPushReceiver). */
+  fun register(c: Context, instance: String): String? {
+    val i = safe(instance)
+    val all = distributors(c)
+    val d = distributor(c)?.takeIf { it in all } ?: all.firstOrNull() ?: return null
+    val token = token(c, i) ?: java.util.UUID.randomUUID().toString().also { prefs(c).edit().putString("token:$i", it).apply() }
+    prefs(c).edit().putBoolean("on:$i", true).putString("distributor", d).apply()
+    c.sendBroadcast(Intent(REGISTER).setPackage(d)
+      .putExtra("token", token)
+      .putExtra("application", c.packageName)
+      .putExtra("message", "Aquamarine: new messages")
+      .putExtra("pi", pi(c)))
+    return d
+  }
+
+  fun unregister(c: Context, instance: String) {
+    val i = safe(instance)
+    val d = distributor(c)
+    val token = token(c, i)
+    if (d != null && token != null) {
+      c.sendBroadcast(Intent(UNREGISTER).setPackage(d).putExtra("token", token).putExtra("application", c.packageName).putExtra("pi", pi(c)))
+    }
+    // A new token next time: the old endpoint stays useless to whoever kept it.
+    prefs(c).edit().putBoolean("on:$i", false).remove("endpoint:$i").remove("token:$i").apply()
+  }
+
+  /** The relay's wake signal: say so (no sender, no text — there is none),
+   *  unless the app is on screen; keep the connection going if that's on. */
+  fun woken(c: Context) {
+    if (AquaPrefs.sync(c)) {
+      try {
+        val i = Intent(c, AquaSyncService::class.java)
+        if (Build.VERSION.SDK_INT >= 26) c.startForegroundService(i) else c.startService(i)
+      } catch (_: Exception) { /* not allowed from the background here: the notification still says it */ }
+    }
+    val state = ActivityManager.RunningAppProcessInfo()
+    ActivityManager.getMyMemoryState(state)
+    if (state.importance <= ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND) return
+    try {
+      val nm = c.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+      if (Build.VERSION.SDK_INT >= 26) {
+        nm.createNotificationChannel(NotificationChannel("push", "New messages", NotificationManager.IMPORTANCE_HIGH))
+      }
+      val open = PendingIntent.getActivity(
+        c, 4, c.packageManager.getLaunchIntentForPackage(c.packageName),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+      )
+      val b = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(c, "push") else Notification.Builder(c)
+      // One notification for all of them: the app shows the chats when opened.
+      nm.notify(7794, b.setContentTitle("Aquamarine")
+        .setContentText(text(c))
+        .setSmallIcon(R.drawable.ic_stat_aquamarine)
+        .setAutoCancel(true)
+        .setContentIntent(open)
+        .build())
+    } catch (_: Exception) {
+      // No notification permission: nothing to say.
+    }
+  }
+}
+
+/** Intents from the UnifiedPush distributor. Exported (another app sends
+ *  them); each must carry our token. */
+class AquaPushReceiver : BroadcastReceiver() {
+  override fun onReceive(context: Context, intent: Intent?) {
+    val i = intent ?: return
+    val mine = i.getStringExtra("token")
+    val inst = AquaPush.instanceOf(context, mine) ?: return
+    if (!AquaPush.on(context, inst)) return
+    when (i.action) {
+      "org.unifiedpush.android.connector.NEW_ENDPOINT" -> {
+        val e = i.getStringExtra("endpoint") ?: return
+        // https only (the relay refuses anything else too). The app sends
+        // it to the relay when it next looks (push.rs, every minute while
+        // connected, and on each connection).
+        if (e.startsWith("https://") && e.length <= 2048) AquaPush.setEndpoint(context, inst, e)
+      }
+      "org.unifiedpush.android.connector.MESSAGE" -> {
+        i.getStringExtra("id")?.let { id ->
+          AquaPush.distributor(context)?.let { d -> context.sendBroadcast(Intent(AquaPush.ACK).setPackage(d).putExtra("token", mine).putExtra("id", id)) }
+        }
+        AquaPush.woken(context)
+      }
+      "org.unifiedpush.android.connector.UNREGISTERED", "org.unifiedpush.android.connector.REGISTRATION_FAILED" ->
+        AquaPush.setEndpoint(context, inst, null)
+    }
   }
 }

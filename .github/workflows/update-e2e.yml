@@ -1,0 +1,80 @@
+# The console server updates itself, for real (review 27.11): a released
+# binary of an older version, as a tester, must find the newer release,
+# download it, check it against the signed sums, restart into it and run it.
+# By hand: from / to as tags (to: the release it should end on). On a PR that
+# changes this file: v1.21.0-24 → v1.21.0-25. After a new release, run it
+# from each version still in use.
+name: update e2e
+
+on:
+  workflow_dispatch:
+    inputs:
+      from:
+        description: "Released tag to start from (e.g. v1.21.0-24)"
+        required: true
+        default: v1.21.0-24
+      to:
+        description: "Tag it must end on (the newest release)"
+        required: true
+        default: v1.21.0-25
+  pull_request:
+    paths: [".github/workflows/update-e2e.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  console-server:
+    name: ${{ inputs.from || 'v1.21.0-24' }} → ${{ inputs.to || 'v1.21.0-25' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    env:
+      FROM: ${{ inputs.from || 'v1.21.0-24' }}
+      TO: ${{ inputs.to || 'v1.21.0-25' }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: The released binary to start from, and the one to end on
+        run: |
+          mkdir -p from to data
+          gh release download "$FROM" -R "$GITHUB_REPOSITORY" -p aqua-server-linux-x64 -D from
+          gh release download "$TO" -R "$GITHUB_REPOSITORY" -p SHA256SUMS.txt -D to
+          chmod +x from/aqua-server-linux-x64
+          mv from/aqua-server-linux-x64 from/aqua-server
+          want=$(awk '$2=="aqua-server-linux-x64"{print $1}' to/SHA256SUMS.txt)
+          [ -n "$want" ] || { echo "::error::$TO lists no aqua-server-linux-x64"; exit 1; }
+          echo "WANT=$want" >> "$GITHUB_ENV"
+          sha256sum from/aqua-server
+      - name: Run it as a tester and wait for it to update itself
+        run: |
+          AQUA_DATA="$PWD/data" AQUA_DATA_PROMPT=0 AQUA_UPDATES=tester AQUA_LISTEN=127.0.0.1:17777 \
+            AQUA_ADMIN_TOKEN=update-e2e-token-0123456789 RUST_LOG=info \
+            nohup ./from/aqua-server > server.log 2>&1 &
+          echo $! > server.pid
+          v="${TO#v}"
+          for i in $(seq 1 90); do
+            sleep 10
+            u=$(curl -s -m 5 -H "Authorization: Bearer update-e2e-token-0123456789" http://127.0.0.1:17777/v1/admin/updates || true)
+            echo "$(date -u +%T) $u"
+            if echo "$u" | grep -q "\"current\":\"$v\""; then
+              echo "running $v"
+              break
+            fi
+          done
+          echo "$u" | grep -q "\"current\":\"$v\"" || { echo "::error::did not end on $v"; cat server.log; exit 1; }
+      - name: What runs is the release's file, checked
+        run: |
+          pid=$(cat server.pid)
+          kill -0 "$pid" && echo "same process (exec in place): $pid" || echo "::notice::another process now"
+          exe=$(readlink "/proc/$pid/exe" || true)
+          echo "running: $exe"
+          # The file on disk where it was put (over the binary, or the data folder).
+          for f in from/aqua-server data/aqua-update/aqua-server; do
+            [ -f "$f" ] && echo "$f $(sha256sum "$f" | cut -d' ' -f1)"
+          done
+          got=$(sha256sum from/aqua-server data/aqua-update/aqua-server 2>/dev/null | awk -v w="$WANT" '$1==w{print $2}' | head -1)
+          [ -n "$got" ] || { echo "::error::no file on disk matches $TO's signed sum"; exit 1; }
+          echo "on disk and signed: $got"
+          curl -sf -m 5 http://127.0.0.1:17777/v1/stats | head -c 300; echo
+      - name: Log
+        if: always()
+        run: sed 's/\x1b\[[0-9;]*m//g' server.log | tail -60

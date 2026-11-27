@@ -32,6 +32,7 @@ pub mod servers;
 pub mod mesh;
 pub mod devlists;
 pub mod relay_host;
+pub mod push;
 pub mod gallery;
 pub mod accounts;
 pub mod fsx;
@@ -448,6 +449,8 @@ pub fn run() -> Result<()> {
             tray::tray_set,
             tray::badge_set,
             relay_host::bg_sync_set,
+            push::push_unifiedpush_set,
+            push::push_unifiedpush_state,
             relay_host::call_service_set,
             relay_host::battery_exempt,
             commands::send_call_signal,

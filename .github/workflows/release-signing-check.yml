@@ -16,6 +16,7 @@ on:
       - "tools/release-sign.sh"
       - "crates/aqua-core/src/release.rs"
       - "crates/aqua-core/tests/release_signing.rs"
+      - "tools/aquamarine-site.sh"
   workflow_dispatch:
 
 permissions:
@@ -42,6 +43,9 @@ jobs:
           echo "UPDATE_PUBKEY:             $want (${#want} hex digits)"
           echo "SECRET_PUB=$pub" >> "$GITHUB_ENV"
           echo "VAR_PUB=$want" >> "$GITHUB_ENV"
+          # tools/aquamarine-site.sh checks the site with the same key, built in.
+          site=$(sed -n 's/^PUBKEY="\([0-9a-f]*\)"$/\1/p' tools/aquamarine-site.sh)
+          [ "$site" = "$want" ] || { echo "::error::PUBKEY in tools/aquamarine-site.sh ($site) isn't UPDATE_PUBKEY"; exit 1; }
           if [ "$pub" = "$want" ]; then echo "match: yes"; echo "KEYS_MATCH=1" >> "$GITHUB_ENV"; else echo "::warning::match: NO — the rest runs with the secret's own public half to check the signing path; this job fails at the end"; echo "KEYS_MATCH=0" >> "$GITHUB_ENV"; fi
       - name: a release-like SHA256SUMS.txt, signed like release.yml signs it
         run: |
