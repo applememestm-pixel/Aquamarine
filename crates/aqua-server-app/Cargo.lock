@@ -104,7 +104,7 @@ dependencies = [
  "ed25519-dalek 2.2.0",
  "hex",
  "hkdf 0.12.4",
- "hmac 0.12.1",
+ "hmac 0.13.0",
  "rand_core 0.6.4",
  "serde",
  "serde_bytes",
@@ -137,7 +137,7 @@ dependencies = [
  "form_urlencoded",
  "futures-util",
  "hex",
- "hmac 0.12.1",
+ "hmac 0.13.0",
  "lettre",
  "nu-ansi-term",
  "rand_core 0.6.4",
@@ -1071,7 +1071,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d045de693cb712d0b22c6a64be5b953f67b3ce00ab5ad3dd5d8b441886ab8e1a"
 dependencies = [
  "quote",
- "syn 3.0.6",
+ "syn 2.0.119",
 ]
 
 [[package]]
