@@ -591,6 +591,12 @@ mod android {
             .build()
     }
 
+    /// Hand a downloaded, checked APK to the system installer (AquaServer.kt).
+    pub fn install_apk(path: &std::path::Path) -> Result<serde_json::Value, String> {
+        let h = HANDLE.get().ok_or("the Android plugin isn't loaded")?;
+        h.run_mobile_plugin::<serde_json::Value>("install", serde_json::json!({ "path": path.to_string_lossy() })).map_err(|e| e.to_string())
+    }
+
     pub fn keep_alive(on: bool, port: u16) {
         let Some(h) = HANDLE.get() else { return };
         let cmd = if on { "start" } else { "stop" };

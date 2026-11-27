@@ -412,14 +412,10 @@ async fn pass(app: &AppHandle, install: bool) -> std::time::Duration {
         set(|s| s.state = "waiting".into());
         return SOON;
     };
-    if cfg!(target_os = "android") {
-        // Android installs an APK only through the system: the window offers it.
-        if let Ok(mut g) = FILE.lock() {
-            *g = Some((PathBuf::new(), url, sha, f.version.clone()));
-        }
-        set(|s| s.state = "ready".into());
-        return EVERY;
-    }
+    // Android too: downloaded here and checked against the signed sums
+    // (review of F: the browser fetched it and nothing here checked it —
+    // Android's own signature check doesn't cover a first install or the
+    // channel); the system installer then gets this very file.
     let path = match download(app, &c, &name, &url, size, &sha).await {
         Ok(p) => p,
         Err(e) => return fail(e),
@@ -428,6 +424,10 @@ async fn pass(app: &AppHandle, install: bool) -> std::time::Duration {
         *g = Some((path, url, sha, f.version.clone()));
     }
     set(|s| s.state = "ready".into());
+    if cfg!(target_os = "android") {
+        // Android installs an APK only when the person agrees: the window offers it.
+        return EVERY;
+    }
     if install && can_self_install() {
         if let Err(e) = install_now(app) {
             return fail(e);
@@ -444,8 +444,8 @@ pub fn install_now(app: &AppHandle) -> Result<(), String> {
     if !aqua_server::release::channel_allows(&version, tester()) {
         return Err("this update is a pre-release, and Tester is off".into());
     }
-    // Still the bytes that were checked (Android only opens the address).
-    if !cfg!(target_os = "android") && file_sha256(&path).as_deref() != Some(sha.as_str()) {
+    // Still the bytes that were checked.
+    if file_sha256(&path).as_deref() != Some(sha.as_str()) {
         return Err("the downloaded update changed on disk — check for updates again".into());
     }
     set(|s| s.state = "installing".into());
@@ -455,9 +455,13 @@ pub fn install_now(app: &AppHandle) -> Result<(), String> {
     let hidden = false;
     #[cfg(target_os = "android")]
     {
-        let _ = (&path, hidden);
-        use tauri_plugin_opener::OpenerExt;
-        return app.opener().open_url(url.as_str(), None::<&str>).map_err(|e| e.to_string());
+        let _ = (&url, hidden, app);
+        let r = crate::android::install_apk(&path)?;
+        if r["needsPermission"].as_bool().unwrap_or(false) {
+            set(|s| s.state = "ready".into());
+            return Err("allow installing apps from Aquamarine Server in the system settings, then press Install again".into());
+        }
+        return Ok(());
     }
     #[cfg(target_os = "windows")]
     {
