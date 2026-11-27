@@ -127,4 +127,7 @@
   @keyframes qs-up { from { transform: translateY(100%); } }
   @keyframes qs-fade { from { opacity: 0; } }
   @keyframes qs-eq { 0%, 100% { transform: scaleY(.35); } 50% { transform: scaleY(1); } }
+  :global(html.wk-lowfx) .qs-state i { animation: none; transform: scaleY(0.55); }
+  :global(html.wk-lowfx) .qs-state i:nth-child(2) { transform: scaleY(1); }
+  :global(html.wk-lowfx) .qs-state i:nth-child(3) { transform: scaleY(0.75); }
 </style>

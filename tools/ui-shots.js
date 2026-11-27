@@ -25,6 +25,7 @@ window.__TAURI_INTERNALS__ = {
   convertFileSrc: (p) => p,
   invoke: async (cmd, args) => {
     (window.__cmds = window.__cmds || []).push(cmd);
+    if (cmd === "get_messages_delta") return { rev: 1, full: true, keep: 0, tail: [], changed: await window.__TAURI_INTERNALS__.invoke("get_messages", args) };
     // The send sheet (pasted picture): a temp file, its bytes, the send.
     if (cmd === "save_temp_file") return "/tmp/pasted.png";
     if (cmd === "read_user_image") return Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="), (c) => c.charCodeAt(0));

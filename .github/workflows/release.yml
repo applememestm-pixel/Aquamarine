@@ -520,7 +520,13 @@ jobs:
           sed -i "0,/<application/s##${sync}#" "$m"
           ssvc='<service android:name=".AquaSyncService" android:exported="false" android:foregroundServiceType="remoteMessaging" />\n    </application>'
           sed -i "s#</application>#${ssvc}#" "$m"
-          grep -n 'AquaRelayService\|AquaScreenService\\|AquaSyncService\|FOREGROUND\|MULTICAST' "$m"
+          # Calls keep the microphone / camera in the background (AquaCallService);
+          # after a reboot or an update the app says it must be opened (AquaBootReceiver).
+          callperms='<uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />\n    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />\n    <application'
+          sed -i "0,/<application/s##${callperms}#" "$m"
+          calls='<service android:name=".AquaCallService" android:exported="false" android:foregroundServiceType="microphone|camera" />\n    <receiver android:name=".AquaBootReceiver" android:exported="false"><intent-filter><action android:name="android.intent.action.BOOT_COMPLETED" /><action android:name="android.intent.action.MY_PACKAGE_REPLACED" /></intent-filter></receiver>\n    </application>'
+          sed -i "s#</application>#${calls}#" "$m"
+          grep -n 'AquaRelayService\|AquaScreenService\|AquaSyncService\|AquaCallService\|AquaBootReceiver\|FOREGROUND\|MULTICAST' "$m"
           # Home-screen widget: unread chats (android/widget)
           cp ../../android/widget/AquaWidget.kt "$(dirname "$(find gen/android/app/src/main/java -name MainActivity.kt | head -1)")/AquaWidget.kt"
           cp -r ../../android/widget/res/* gen/android/app/src/main/res/
@@ -962,14 +968,17 @@ jobs:
           except Exception: builds = {}
           for name in open("../fresh.txt").read().split("\n"):
               name = name.strip()
-              if name and name not in ("SHA256SUMS.txt", "SHA256SUMS.txt.sig", "BUILDS.json"):
+              if name and name not in ("SHA256SUMS.txt", "SHA256SUMS.txt.sig", "BUILDS.json", "VERSION"):
                   builds[name] = sha
           json.dump(builds, open("../BUILDS.json", "w"), indent=1, sort_keys=True)
           print(json.dumps(builds, indent=1, sort_keys=True))
           PY
+          # Which release these sums are for: the apps install only a release
+          # whose signed list names its own number (aqua-core/src/release.rs).
+          printf '%s' "${TAG#v}" > VERSION
           sha256sum -- * > ../SHA256SUMS.txt
           cat ../SHA256SUMS.txt
-          gh release upload "$TAG" ../SHA256SUMS.txt ../BUILDS.json --repo "$GITHUB_REPOSITORY" --clobber
+          gh release upload "$TAG" VERSION ../SHA256SUMS.txt ../BUILDS.json --repo "$GITHUB_REPOSITORY" --clobber
           # AQUA-SEC-012: sign the exact sums text with the release key
           # (secret UPDATE_SIGNING_KEY: an Ed25519 private key in PEM). The
           # apps check it once aqua-core/src/release.rs has the public key.

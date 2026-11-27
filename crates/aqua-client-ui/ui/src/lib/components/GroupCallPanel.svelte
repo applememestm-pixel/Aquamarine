@@ -10,6 +10,7 @@
   import { avatars } from "../people";
   import { isAdmin } from "../groupRules";
   import { t } from "../i18n";
+  import { IS_MOBILE } from "../platform";
   import { spatial, setSpatial } from "../spatial";
   import SpatialMap from "./SpatialMap.svelte";
 
@@ -19,6 +20,12 @@
   let focus = $state<string | null>(null);
   let now = $state(Date.now());
   $effect(() => { const i = setInterval(() => (now = Date.now()), 1000); return () => clearInterval(i); });
+  // Phones: the "you're in a call" pill is a bar above the app (app.css).
+  $effect(() => {
+    if (!IS_MOBILE || mode !== "pill" || !$groupCall) return;
+    document.documentElement.classList.add("gcall-strip");
+    return () => document.documentElement.classList.remove("gcall-strip");
+  });
 
   const g = $derived($groupMap[gid]);
   const mine = $derived($groupCall && $groupCall.gid === gid ? $groupCall : null);
@@ -158,11 +165,10 @@
 {/if}
 
 <style>
-  .live-dot { width: 8px; height: 8px; border-radius: 50%; background: #3ddc84; box-shadow: 0 0 10px #3ddc84; animation: pulse 1.6s ease-in-out infinite; flex-shrink: 0; }
-  @keyframes pulse { 50% { opacity: 0.45; } }
+  .live-dot { width: 8px; height: 8px; border-radius: 50%; background: #3ddc84; flex-shrink: 0; }
   .stage {
     margin: 8px 12px 0; border-radius: calc(16px * var(--rk, 1)); border: 1px solid var(--border-strong); overflow: hidden;
-    background: radial-gradient(600px 220px at 50% 0%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 70%), var(--bg-shell);
+    background: var(--bg-shell);
     box-shadow: 0 18px 40px -22px rgba(0, 0, 0, 0.8);
   }
   .st-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; font-size: 13px; color: var(--fg); }
@@ -172,22 +178,21 @@
   .grid { display: grid; grid-template-columns: repeat(var(--n), minmax(0, 1fr)); gap: 8px; padding: 0 12px 4px; max-height: 340px; overflow-y: auto; }
   .grid.solo { grid-template-columns: minmax(0, 420px); justify-content: center; }
   /* ---- full screen (Discord voice channel) ---- */
-  .stage.full { margin: 0; height: 100%; border-radius: 0; border: none; display: flex; flex-direction: column;
-    background: radial-gradient(900px 400px at 50% 0%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 70%), #08090f; }
+  .stage.full { margin: 0; height: 100%; border-radius: 0; border: none; display: flex; flex-direction: column; background: #08090f; }
   .stage.full .st-head { padding: 12px 18px; font-size: 14px; }
   .fu-room { font-size: 15px; }
   .fu-chat { display: flex; align-items: center; gap: 6px; border: 1px solid var(--border-strong); background: var(--bg-input); color: var(--fg);
     border-radius: calc(10px * var(--rk, 1)); padding: 7px 12px; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; transition: background .2s, color .2s, border-color .2s; }
   .fu-chat svg { width: 16px; height: 16px; }
   .fu-chat:hover, .fu-chat.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
-  .stage.full .grid { flex: 1; max-height: none; padding: 8px 24px; align-content: center; gap: 12px;
+  .stage.full .grid { flex: 1; max-height: none; padding: 8px 24px; align-content: safe center; gap: 12px; min-height: 0;
     grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); }
   .stage.full .grid.solo { grid-template-columns: minmax(0, min(100%, 760px)); }
   .stage.full .grid.focus { grid-template-columns: 1fr; }
   .stage.full .tile { border-radius: calc(16px * var(--rk, 1)); background: #15171f; animation: tile-in .35s cubic-bezier(.2,.9,.25,1.1) both; }
   @keyframes tile-in { from { opacity: 0; transform: scale(.94); } }
   .stage.full .ava { width: 96px; height: 96px; font-size: 38px; position: relative; box-shadow: 0 10px 30px rgba(0,0,0,.5); }
-  .stage.full .tile.speaking .ava { box-shadow: 0 0 0 4px var(--accent), 0 0 30px 6px var(--accent-glow, color-mix(in srgb, var(--accent) 55%, transparent)), 0 10px 30px rgba(0,0,0,.5); }
+  .stage.full .tile.speaking .ava { box-shadow: 0 0 0 4px var(--accent); }
   .tile-bg { position: absolute; inset: -20%; width: 140%; height: 140%; object-fit: cover; filter: blur(30px) brightness(.45) saturate(1.3); }
   .stage.full .name { font-size: 13px; left: 12px; bottom: 10px; }
   .stage.full .ctrls { padding: 14px 0 20px; }
@@ -198,7 +203,7 @@
     display: grid; place-items: center; overflow: hidden; cursor: pointer; padding: 0; color: var(--fg); transition: border-color 0.12s, box-shadow 0.12s;
   }
   /* Who's talking: the tile lights up in the theme's colour. */
-  .tile.speaking { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent), 0 0 26px -4px var(--accent-glow, color-mix(in srgb, var(--accent) 60%, transparent)); }
+  .tile.speaking { border-color: var(--accent); }
   .tile video { width: 100%; height: 100%; object-fit: cover; background: #000; }
   .tile video.mirror { transform: scaleX(-1); }
   .ava { width: 56px; height: 56px; border-radius: var(--ava-r, 50%); overflow: hidden; display: grid; place-items: center; font-weight: 800; font-size: 22px; background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #06070c; }
@@ -213,11 +218,11 @@
     display: grid; place-items: center; cursor: pointer; transition: all 0.12s;
   }
   .cb svg, .pb svg { width: 19px; height: 19px; }
-  .cb:hover, .pb:hover { color: var(--accent); box-shadow: 0 0 14px -2px var(--accent-glow); }
+  .cb:hover, .pb:hover { color: var(--accent); }
   .cb.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
   .cb.off, .pb.off { background: rgba(255, 77, 109, 0.14); color: #ff6b6b; border-color: rgba(255, 77, 109, 0.4); }
   .cb.leave, .pb.leave { background: #ed4245; border-color: #ed4245; color: #fff; }
-  .cb.leave:hover, .pb.leave:hover { box-shadow: 0 0 16px -2px rgba(237, 66, 69, 0.8); color: #fff; }
+  .cb.leave:hover, .pb.leave:hover { color: #fff; }
   .join-bar {
     display: flex; align-items: center; gap: 10px; margin: 8px 12px 0; padding: 9px 12px; border-radius: calc(12px * var(--rk, 1));
     border: 1px solid color-mix(in srgb, #3ddc84 35%, transparent); background: color-mix(in srgb, #3ddc84 8%, var(--bg-shell));
@@ -238,4 +243,34 @@
   .pill-main span { font-size: 11.5px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
   .pb { width: 32px; height: 32px; }
   .pb svg { width: 16px; height: 16px; }
+
+  /* ---------- phones (platform, not window width) ---------- */
+  :global(html.phone) .pill {
+    position: fixed; top: var(--sat, env(safe-area-inset-top, 0px)); left: 0; right: 0; z-index: 90; height: 52px; box-sizing: border-box;
+    margin: 0; padding: 0 10px; border: none; border-bottom: 1px solid var(--border); border-radius: 0; background: var(--bg-surface);
+  }
+  /* Under the 1:1 call's bar when both are up. */
+  :global(html.phone.call-strip) .pill { top: calc(var(--sat, env(safe-area-inset-top, 0px)) + 52px); }
+  :global(html.phone) .pb { width: 38px; height: 38px; flex-shrink: 0; }
+  :global(html.phone) .st-head { min-width: 0; }
+  :global(html.phone) .st-head :is(b, .st-sub) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  :global(html.phone) .st-x { width: 36px; height: 36px; margin: -8px 0; flex-shrink: 0; font-size: 18px; }
+  /* In the chat: small squares, three in a row — four wide ones squashed the
+     faces and the names into each other. */
+  :global(html.phone) .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); grid-auto-rows: max-content; max-height: 30vh; overflow-y: auto; }
+  :global(html.phone) .grid.solo { grid-template-columns: minmax(0, 200px); }
+  :global(html.phone) .tile { aspect-ratio: 1; }
+  :global(html.phone) .stage:not(.full) .tile:not(.video) { align-content: center; padding-bottom: 20px; }
+  :global(html.phone) .stage:not(.full) .ava { width: 44px; height: 44px; font-size: 18px; }
+  :global(html.phone) .name { max-width: calc(100% - 12px); box-sizing: border-box; left: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
+  :global(html.phone) .name svg { margin-left: 4px; vertical-align: -2px; }
+  /* Full screen: two in a row. */
+  /* max-content rows: squares scroll instead of squashing into each other. */
+  :global(html.phone) .stage.full .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: max-content; padding: 8px 10px; gap: 8px; overflow-y: auto; }
+  :global(html.phone) .stage.full .grid.solo, :global(html.phone) .stage.full .grid.focus { grid-template-columns: minmax(0, 1fr); max-width: none; }
+  :global(html.phone) .stage.full .tile { aspect-ratio: 1; }
+  :global(html.phone) .stage.full .grid.solo .tile { aspect-ratio: 3 / 4; max-height: 100%; width: 100%; }
+  :global(html.phone) .stage.full .ava { width: 72px; height: 72px; font-size: 30px; }
+  :global(html.phone) .ctrls, :global(html.phone) .stage.full .ctrls { flex-wrap: wrap; gap: 7px; padding: 10px 6px 12px; }
+  :global(html.phone) .cb, :global(html.phone) .stage.full .cb { width: min(44px, 11.8vw); height: min(44px, 11.8vw); flex-shrink: 0; }
 </style>

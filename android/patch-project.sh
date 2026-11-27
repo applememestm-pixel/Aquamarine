@@ -80,6 +80,26 @@ if ! grep -q AquaScreenService "$M"; then
     </application>' perl -0pi -e 's|</application>|$ENV{AQ_SCS}|' "$M"
   echo '[patch] screen sharing service + nearby permissions added'
 fi
+# 1c-sync. Background messages, calls in the background, the reminder after a
+#          reboot (AquaRelay.kt: AquaSyncService, AquaCallService, AquaBootReceiver).
+if ! grep -q AquaSyncService "$M"; then
+  AQ_SYP='<uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    ' perl -0pi -e 's/<application/$ENV{AQ_SYP}<application/' "$M"
+  AQ_SYS='<service android:name=".AquaSyncService" android:exported="false" android:foregroundServiceType="remoteMessaging" />
+    </application>' perl -0pi -e 's|</application>|$ENV{AQ_SYS}|' "$M"
+  echo '[patch] background connection service added'
+fi
+if ! grep -q AquaCallService "$M"; then
+  AQ_CAP='<uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    ' perl -0pi -e 's/<application/$ENV{AQ_CAP}<application/' "$M"
+  AQ_CAS='<service android:name=".AquaCallService" android:exported="false" android:foregroundServiceType="microphone|camera" />
+    <receiver android:name=".AquaBootReceiver" android:exported="false"><intent-filter><action android:name="android.intent.action.BOOT_COMPLETED" /><action android:name="android.intent.action.MY_PACKAGE_REPLACED" /></intent-filter></receiver>
+    </application>' perl -0pi -e 's#</application>#$ENV{AQ_CAS}#' "$M"
+  echo '[patch] call service and boot reminder added'
+fi
 # 1c'''. Home-screen widget (android/widget).
 if [ -n "$MA" ]; then
   cp -f "$HERE/widget/AquaWidget.kt" "$(dirname "$MA")/AquaWidget.kt"

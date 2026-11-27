@@ -48,7 +48,7 @@ fn tester() -> bool {
 }
 static BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// What `install` will open / run.
-static FILE: Mutex<Option<(PathBuf, String)>> = Mutex::new(None);
+static FILE: Mutex<Option<(PathBuf, String, String)>> = Mutex::new(None);
 
 fn set(f: impl FnOnce(&mut UpdState)) {
     if let Ok(mut g) = STATE.lock() {
@@ -194,7 +194,7 @@ async fn find_web(c: &reqwest::Client) -> Result<Option<Found>, String> {
             _ => None,
         };
         // AQUA-SEC-012: unsigned sums don't count once the release key is set.
-        let sums = if aqua_server::release::sums_trusted(&sums, sig.as_deref()) { sums } else { String::new() };
+        let sums = if aqua_server::release::sums_trusted_for(&sums, sig.as_deref(), &version) { sums } else { String::new() };
         let sha = sums.lines().find_map(|l| {
             let mut it = l.split_whitespace();
             let h = it.next()?;
@@ -270,7 +270,7 @@ async fn pick(c: &reqwest::Client, list: &serde_json::Value) -> Result<Option<Fo
                         },
                         _ => None,
                     };
-                    if let Some(t) = text.filter(|t| aqua_server::release::sums_trusted(t, sig.as_deref())) {
+                    if let Some(t) = text.filter(|t| aqua_server::release::sums_trusted_for(t, sig.as_deref(), &version)) {
                         sha = t.lines().find_map(|l| {
                             let mut it = l.split_whitespace();
                             let h = it.next()?;
@@ -313,7 +313,7 @@ fn file_sha256(p: &std::path::Path) -> Option<String> {
 
 async fn download(app: &AppHandle, c: &reqwest::Client, name: &str, url: &str, size: u64, sha: &str) -> Result<PathBuf, String> {
     use std::io::Write;
-    if !url.starts_with("https://github.com/") || name.contains(['/', '\\']) {
+    if !url.starts_with(aqua_server::release::DOWNLOAD_PREFIX) || name.contains(['/', '\\']) {
         return Err("unexpected update address".into());
     }
     let d = dir(app)?;
@@ -409,7 +409,7 @@ async fn pass(app: &AppHandle, install: bool) -> std::time::Duration {
     if cfg!(target_os = "android") {
         // Android installs an APK only through the system: the window offers it.
         if let Ok(mut g) = FILE.lock() {
-            *g = Some((PathBuf::new(), url));
+            *g = Some((PathBuf::new(), url, sha));
         }
         set(|s| s.state = "ready".into());
         return EVERY;
@@ -419,7 +419,7 @@ async fn pass(app: &AppHandle, install: bool) -> std::time::Duration {
         Err(e) => return fail(e),
     };
     if let Ok(mut g) = FILE.lock() {
-        *g = Some((path, url));
+        *g = Some((path, url, sha));
     }
     set(|s| s.state = "ready".into());
     if install && can_self_install() {
@@ -432,7 +432,11 @@ async fn pass(app: &AppHandle, install: bool) -> std::time::Duration {
 
 /// Put the downloaded file in place (or open it where that's all we can do).
 pub fn install_now(app: &AppHandle) -> Result<(), String> {
-    let (path, url) = FILE.lock().ok().and_then(|g| g.clone()).ok_or("nothing downloaded yet")?;
+    let (path, url, sha) = FILE.lock().ok().and_then(|g| g.clone()).ok_or("nothing downloaded yet")?;
+    // Still the bytes that were checked (Android only opens the address).
+    if !cfg!(target_os = "android") && file_sha256(&path).as_deref() != Some(sha.as_str()) {
+        return Err("the downloaded update changed on disk — check for updates again".into());
+    }
     set(|s| s.state = "installing".into());
     #[cfg(desktop)]
     let hidden = app.get_webview_window("main").and_then(|w| w.is_visible().ok()).map(|v| !v).unwrap_or(false);

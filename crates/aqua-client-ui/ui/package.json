@@ -1,14 +1,14 @@
 {
   "name": "aqua-client-ui-frontend",
   "private": true,
-  "version": "1.21.0-23",
+  "version": "1.21.0-24",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json",
-    "test:unit": "esbuild tests/pins.test.ts --bundle --platform=node --format=esm --outfile=tests/.out/pins.test.mjs --log-level=error && node tests/.out/pins.test.mjs"
+    "test:unit": "esbuild tests/back.test.ts --bundle --platform=node --format=esm --outfile=tests/.out/back.test.mjs --external:*.svelte --log-level=error && node tests/.out/back.test.mjs && esbuild tests/pins.test.ts --bundle --platform=node --format=esm --outfile=tests/.out/pins.test.mjs --log-level=error && node tests/.out/pins.test.mjs && esbuild tests/history.test.ts --bundle --platform=node --format=esm --outfile=tests/.out/history.test.mjs --log-level=error && node tests/.out/history.test.mjs && esbuild tests/groupVideo.test.ts --bundle --platform=node --format=esm --outfile=tests/.out/groupVideo.test.mjs --log-level=error && node tests/.out/groupVideo.test.mjs && esbuild tests/callService.test.ts --bundle --platform=node --format=esm --outfile=tests/.out/callService.test.mjs --log-level=error && node tests/.out/callService.test.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",

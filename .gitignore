@@ -37,6 +37,8 @@ aqua-smtp.json
 # once wrote the key here and it was committed — never again)
 aqua-federation.json
 aqua-fed-node.key
+aqua-fed-seen.log
+aqua-fed-seen.tmp
 *.key
 # Who came online / signed in (admin panel journal)
 aqua-journal.log

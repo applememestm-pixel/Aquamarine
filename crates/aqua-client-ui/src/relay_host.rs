@@ -35,9 +35,17 @@ pub mod android {
     }
 
     /// The messenger's background connection (AquaSyncService) on / off.
-    pub fn background_sync(on: bool) -> Result<(), String> {
+    pub fn background_sync(on: bool, reminder: Option<String>) -> Result<(), String> {
         let h = HANDLE.get().ok_or("background connection is not available")?;
-        h.run_mobile_plugin::<serde_json::Value>(if on { "syncStart" } else { "syncStop" }, serde_json::json!({}))
+        h.run_mobile_plugin::<serde_json::Value>(if on { "syncStart" } else { "syncStop" }, serde_json::json!({ "reminder": reminder }))
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    /// The call's foreground service (AquaCallService) on / off.
+    pub fn call_service(on: bool, text: Option<String>) -> Result<(), String> {
+        let h = HANDLE.get().ok_or("the call service is not available")?;
+        h.run_mobile_plugin::<serde_json::Value>("callService", serde_json::json!({ "on": on, "text": text }))
             .map(|_| ())
             .map_err(|e| e.to_string())
     }
@@ -168,11 +176,21 @@ pub fn widget_update(data: String) -> Result<(), String> {
 
 /// Stay connected in the background (Android: a quiet foreground service).
 #[tauri::command]
-pub fn bg_sync_set(on: bool) -> Result<(), String> {
+pub fn bg_sync_set(on: bool, reminder: Option<String>) -> Result<(), String> {
     #[cfg(target_os = "android")]
-    { android::background_sync(on) }
+    { android::background_sync(on, reminder) }
     #[cfg(not(target_os = "android"))]
-    { let _ = on; Ok(()) }
+    { let _ = (on, reminder); Ok(()) }
+}
+
+/// A call is on or over (Android: keeps the microphone and camera working in
+/// the background with a foreground service).
+#[tauri::command]
+pub fn call_service_set(on: bool, text: Option<String>) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    { android::call_service(on, text) }
+    #[cfg(not(target_os = "android"))]
+    { let _ = (on, text); Ok(()) }
 }
 
 /// Android: ask to take the app off battery optimisation. True if it already is.

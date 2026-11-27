@@ -2,6 +2,7 @@ import { listen } from "@tauri-apps/api/event";
 import { writable, derived, get } from "svelte/store";
 import type { ChatMessage, ChatSummary, InitInfo } from "./types";
 import { api, events } from "./tauri";
+import { historyCache } from "./chatHistory";
 import { onBack } from "./back";
 import { contacts, contactMatches, displayName, saveContact } from "./contacts";
 import { settings } from "./theme";
@@ -480,6 +481,19 @@ export function backToList(_fromHistory = false) {
   r?.();
 }
 
+/** Deep equality of plain data from the backend. Stops at the first
+ *  difference and builds no strings: serialising every message twice on each
+ *  refresh was felt on phones with long chats. */
+function sameData(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  const x = a as Record<string, unknown>, y = b as Record<string, unknown>;
+  const keys = Object.keys(x);
+  if (keys.length !== Object.keys(y).length) return false;
+  return keys.every((k) => Object.prototype.hasOwnProperty.call(y, k) && sameData(x[k], y[k]));
+}
+
 /** Keep the old object for every message that didn't change, so a
  *  refresh after one new message doesn't re-render the whole chat. */
 function reuseUnchanged(prev: ChatMessage[], next: ChatMessage[]): ChatMessage[] {
@@ -488,18 +502,22 @@ function reuseUnchanged(prev: ChatMessage[], next: ChatMessage[]): ChatMessage[]
   let same = prev.length === next.length;
   const out = next.map((m, i) => {
     const o = old.get(m.id);
-    const keep = o && JSON.stringify(o) === JSON.stringify(m) ? o : m;
+    const keep = o && sameData(o, m) ? o : m;
     if (keep !== prev[i]) same = false;
     return keep;
   });
   return same ? prev : out;
 }
 
+const history = historyCache((id, since) => api.getMessagesDelta(id, since));
+/** The next read of any chat is a full one (how times are shown changed). */
+export const forgetHistory = () => history.forget();
+
 export async function loadActiveMessages() {
   const id = get(activeId);
   if (!id) { activeMessages.set([]); return; }
   try {
-    const msgs = await api.getMessages(id);
+    const msgs = await history.fetch(id);
     // Another chat was opened meanwhile: its own load fills the view (before,
     // a slow answer for the old chat could land in the new one).
     if (get(activeId) !== id) return;
@@ -536,7 +554,7 @@ export async function sendCurrent(text: string): Promise<string | null> {
     // A bot mentioned in it gets this one message (guest bots).
     void import("./botHelpers").then((m) => m.routeGuestMentions(id, text)).catch(() => {});
     // Refresh both messages and chat list (backend bumps chat to top).
-    const [msgs, updated] = await Promise.all([api.getMessages(id), api.listChats()]);
+    const [msgs, updated] = await Promise.all([history.fetch(id), api.listChats()]);
     // Switched chats while it was going out: don't show this chat's
     // messages in the other one.
     if (get(activeId) === id) activeMessages.set(reuseUnchanged(get(activeMessages), msgs));

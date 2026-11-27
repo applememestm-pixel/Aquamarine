@@ -36,6 +36,7 @@
 - Новый формат сообщения → `compat.ts::KNOWN`. Служебная приставка → `commands.rs::is_control_text`.
 - Удаление сообщений → `history_sync::tombstone`. Отправка своим устройствам → `multidev::send_to_own`.
 - Нерасшифрованное сообщение не отбрасывать молча — `multidev::repair_session` (копии узнаёт `already_decrypted`). `Closed` старого `Transport` игнорируется (`connect_to_server`), `Drop` гасит его задачи — иначе связь «мигает».
+- Android: у каждого плагина `@TauriPlugin` прямо над классом (без неё R8 выкидывает его из выпуска); новая служба/ресивер → и `release.yml`, и `android/patch-project.sh` / `.ps1` (`tools/check_android.py`).
 - Списки — только `Select.svelte`. Скругления — `calc(Npx * var(--rk, 1))`. Окна: крестик `data-x`, панель `data-back` (`lib/back.ts`).
 - «Сложная» настройка → `SettingsPanel.svelte::ADVANCED`. Новая/переименованная настройка → `python3 tools/settings_index.py` (поиск по настройкам; CI проверяет). Платформа — `lib/platform.ts` (`IS_MOBILE`/`IS_DESKTOP`), не ширина окна.
 - Цвета — только через переменные темы (`theme.ts`), карточка профиля — `cardStyle.ts::cardLook` + класс `.light`.
@@ -45,7 +46,7 @@
 - Navidrome: логин сервера людям не отдаётся — только `/v1/music/*` насквозь (`aqua-server/src/music.rs`); звук в клиенте — через `media_server::remote_url`, не прямыми ссылками (CSP).
 - Мини-приложение встроенного бота сервера — адрес `aqua:relay/<путь>` (`tgapi::set_builtin_app`, клиент подставляет свой сервер в `openMiniApp`); кто открыл — только `tgapi::check_init`.
 - Mesh (`mesh.rs`): новый кадр — только за флагом в `hello.caps`, иначе старые версии рвут сессию на «bad frame».
-- Обновления на Windows — тихий NSIS `/S` + перезапуск (`src/updates.rs` в обоих приложениях); без строки в `SHA256SUMS.txt` не ставится.
+- Обновления на Windows — тихий NSIS `/S` + перезапуск (`src/updates.rs` в обоих приложениях); без строки в подписанном `SHA256SUMS.txt` не ставится, и там же нужна строка файла `VERSION` (`release.yml`, `sums_trusted_for`) — без неё не обновится никто.
 - Обновления обязательны (владелец): выпуски ставятся сами везде, «Позже»/выключатель не возвращать; пре-выпуски — только «Тестер». Ночных сборок нет; канал тестера — наибольший номер тега, не `published_at`. Консольный сервер — `selfupdate.rs` (имена файлов выпуска `aqua-server-<os>-<arch>` не менять).
 - Панель Aquamarine Server ходит в сервер только через `admin(…, target)`; удалённый — SSH-туннель (`remote.rs`, порт/токен из `panel.json`, `host::write_panel_file`).
 

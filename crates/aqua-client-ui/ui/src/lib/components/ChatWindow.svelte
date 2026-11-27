@@ -1412,6 +1412,8 @@
     if (!messagesEl) return;
     const dist = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight;
     scrolledUp = dist > messagesEl.clientHeight * 0.9;
+    clearTimeout(trimTimer);
+    if (dist <= 40 && shownCount > WINDOW_STEP + WINDOW_FIRST) trimTimer = setTimeout(() => void trimOlder(), 1500);
     // Not while it's still settling at the bottom: the first paint starts at
     // the top, and loading older messages there pulled the chat up.
     if (performance.now() >= stickUntil && messagesEl.scrollTop < 600) void showOlder();
@@ -1883,27 +1885,26 @@
     }
     return c;
   });
-  /** The message a reply quotes: the nearest one above with that text — its
-   *  author's when the name maps back. By the text alone every sticker
-   *  ("Sticker") or every "ок" counted the reply as its own. */
-  function quotedIndex(at: number, text: string, author: string): number {
-    const who = quoteUser(author);
-    let loose = -1;
-    for (let i = at - 1; i >= 0; i--) {
-      if (quoteOf(rows[i]) !== text) continue;
-      if (whoOf(rows[i]) === who) return i;
-      if (loose < 0) loose = i;
-    }
-    return loose;
-  }
-  /** Reply id → the id of the message it answers. */
+  /** Reply id → the id of the message it answers: the nearest one above with
+   *  the quoted text — its author's when the name maps back. By the text alone
+   *  every sticker ("Sticker") or every "ок" counted the reply as its own.
+   *  One pass: a look back from each reply was felt in long chats. */
   let replyTargets = $derived.by(() => {
     const m = new Map<string, string>();
-    rows.forEach((r, i) => {
-      if (r.kind.type !== "reply") return;
-      const j = quotedIndex(i, r.kind.content.quoted_text, r.kind.content.quoted_author);
-      if (j >= 0) m.set(r.id, rows[j].id);
-    });
+    if (!rows.some((r) => r.kind.type === "reply")) return m;
+    /** The latest message so far with a text, and with that text by an author. */
+    const byText = new Map<string, string>();
+    const byAuthor = new Map<string, string>();
+    for (const r of rows) {
+      if (r.kind.type === "reply") {
+        const q = r.kind.content.quoted_text;
+        const to = byAuthor.get(JSON.stringify([q, quoteUser(r.kind.content.quoted_author)])) ?? byText.get(q);
+        if (to !== undefined) m.set(r.id, to);
+      }
+      const q = quoteOf(r);
+      byText.set(q, r.id);
+      byAuthor.set(JSON.stringify([q, whoOf(r)]), r.id);
+    }
     return m;
   });
   /** Message id → how many replies it has. */
@@ -1994,13 +1995,14 @@
     }
     return out;
   });
-  // ---- Glass panels (phones, Settings → Appearance): the chat runs on
-  // under the message field, which floats over it. What sits under the
-  // messages (reply bar, field, keyboard…) is measured, and the message list
-  // reaches that far down with as much padding, so nothing hides behind. ----
+  // ---- Phones: the chat (and its wallpaper) runs on under the header and
+  // the message field, whose pieces float over it (Telegram); "glass" only
+  // makes them see-through. What sits above and under the messages (header,
+  // reply bar, field…) is measured, and the message list reaches that far
+  // with as much padding, so nothing hides behind. ----
   $effect(() => {
     const root = chatRoot;
-    if (!root || !phoneUI || !($settings.glass ?? true)) { root?.style.removeProperty("--below-h"); root?.style.removeProperty("--above-h"); return; }
+    if (!root || !phoneUI) { root?.style.removeProperty("--below-h"); root?.style.removeProperty("--above-h"); return; }
     let raf = 0;
     const measure = () => {
       cancelAnimationFrame(raf);
@@ -2259,6 +2261,8 @@
     const c = $activeChat;
     if (!c) return [];
     const out: HdrItem[] = [];
+    // Phones: search lives here, so the name gets the header's width.
+    if (phoneUI) out.push({ id: "search", label: tr("Search in chat"), icon: icons.search, on: searchOpen, run: () => (searchOpen ? closeSearch() : openSearch()) });
     out.push({ id: "theme", label: tr("Chat theme"), sub: tr("Colours and background of this chat"), icon: IC.palette, on: !!$chatThemes[c.id], run: () => (themeFor = c.id) });
     if (c.id !== "__saved__" && !isBotChat) out.push({ id: "cal", label: tr("Calendar"), sub: tr("Events and reminders of this chat"), icon: IC.cal, on: $calendarFor === c.id, run: () => calendarFor.set($calendarFor === c.id ? null : c.id) });
     if (ttlEditable || chatTtl) out.push({ id: "ttl", label: tr("Auto-delete & read receipts"), sub: chatTtl ? tr("Auto-delete: {t}", { t: ttlLabel(chatTtl) }) : tr("Off"), icon: IC.ttl, on: chatTtl > 0, run: () => (ttlMenu = true) });
@@ -2379,7 +2383,7 @@
   let headerEl = $state<HTMLElement | null>(null);
   // Measured only for the voice view (a size binding here kept a
   // ResizeObserver busy on every repaint of the chat).
-  $effect(() => { if (fullVoice && headerEl) headerH = headerEl.offsetHeight; });
+  $effect(() => { if (fullVoice && headerEl) headerH = headerEl.offsetTop + headerEl.offsetHeight; });
   let inMyCall = $derived(!!activeGroup && $groupCall?.gid === activeGroup.id);
   let fullVoice = $derived(!!activeGroup && !!voiceView[activeGroup.id] && inMyCall);
   let voiceRoomName = $derived(activeGroup ? rooms.find((r) => r.id === voiceView[activeGroup.id])?.name ?? "" : "");
@@ -2564,7 +2568,7 @@
   });
   $effect(() => {
     void $activeChat?.id;
-    untrack(() => { shownCount = WINDOW_FIRST; });
+    untrack(() => { clearTimeout(trimTimer); shownCount = WINDOW_FIRST; });
   });
   let growing = false;
   async function showOlder() {
@@ -2574,6 +2578,20 @@
     shownCount += WINDOW_STEP;
     await tick();
     if (messagesEl) messagesEl.scrollTop = top0 + (messagesEl.scrollHeight - h0);
+    growing = false;
+  }
+  /** Rows pile up while reading back. Once the person rests at the bottom
+   *  again, take the old ones out: a long history left in the page made every
+   *  layout slow on phones. Not while searching or selecting. */
+  let trimTimer: ReturnType<typeof setTimeout> | undefined;
+  async function trimOlder() {
+    const el = messagesEl;
+    if (growing || !el || searchOpen || selecting) return;
+    if (el.scrollHeight - el.scrollTop - el.clientHeight > 40) return;
+    growing = true;
+    shownCount = WINDOW_STEP;
+    await tick();
+    el.scrollTop = el.scrollHeight;
     growing = false;
   }
   /** Make sure a row is rendered before scrolling to it. */
@@ -4226,7 +4244,7 @@
             {/if}
             <span class="group-name-btn" class:dim={!!activeRoom}>{$activeChat.name}</span>
           {:else}
-            {$activeChat.name}{#if $peerCards[$activeChat.id]?.verified}<OfficialMark size={17} />{/if}{#if $peerCards[$activeChat.id]?.star != null}<StarMark kind={$peerCards[$activeChat.id]?.star ?? 0} size={17} />{/if}<EmojiStatus token={emojiStatusOf($peerCards, $activeChat.id)} size={18} zoom />
+            <span class="pn-text">{$activeChat.name}</span>{#if $peerCards[$activeChat.id]?.verified}<OfficialMark size={17} />{/if}{#if $peerCards[$activeChat.id]?.star != null}<StarMark kind={$peerCards[$activeChat.id]?.star ?? 0} size={17} />{/if}<EmojiStatus token={emojiStatusOf($peerCards, $activeChat.id)} size={18} zoom />
             {#if $clans[$activeChat.id]}<span class="hdr-clan"><ClanTag tag={$clans[$activeChat.id]} /></span>{/if}
           {/if}
           {#if e2eePeer}
@@ -4319,7 +4337,9 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{#if feedView}<path d="M4 6h10M4 12h16M4 18h12"/>{:else}<rect x="3" y="3" width="18" height="8" rx="2"/><rect x="3" y="13" width="18" height="8" rx="2"/>{/if}</svg>
           </button>
         {/if}
-        <button class="icon-btn" class:active={searchOpen} title={$t("Search in chat")} onclick={() => (searchOpen ? closeSearch() : openSearch())}>{@html icons.search}</button>
+        {#if !phoneUI}
+          <button class="icon-btn" class:active={searchOpen} title={$t("Search in chat")} onclick={() => (searchOpen ? closeSearch() : openSearch())}>{@html icons.search}</button>
+        {/if}
         {#if callChoices.length}
           <div class="ttl-wrap hdr-menu">
             <button class="icon-btn call-btn" class:active={callMenu} class:live={callChoices.some((c) => c.on)} title={$t("Call")} aria-haspopup="menu" aria-expanded={callMenu}
@@ -5428,8 +5448,8 @@
     {/if}
     <div class="composer" class:disabled={!liveChat} class:chan-bar={isChannel && liveChat && IS_MOBILE} bind:this={composerBox}>
       {#if isChannel && liveChat}
-        <!-- A channel on a phone (Telegram): one bar — who posts, stickers, the
-             text, 📎, the round button. The PC keeps its usual field (the
+        <!-- A channel on a phone (Telegram): one bar — who posts, 📎, the text,
+             stickers, the round button. The PC keeps its usual field (the
              owner's call), with only the 🔔 added. -->
         <!-- 🔔: subscribers get a sound / a notification; off — a silent post. -->
         <button class="cb-bell" class:off={!!$silentChans[$activeChat?.id ?? ""]} aria-pressed={!!$silentChans[$activeChat?.id ?? ""]}
@@ -5459,9 +5479,7 @@
       {/if}
       <!-- Attach popup (Media / Article / Poll) -->
       <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <!-- Phone, text typed: the clip floats over the send button (Telegram) —
-           under the thumb, and the field takes its place. -->
-      <div class="attach-wrap" class:float={IS_MOBILE && liveChat && text.trim().length > 0} onmousedown={(e) => e.stopPropagation()}>
+      <div class="attach-wrap" onmousedown={(e) => e.stopPropagation()}>
         {#if attachMenuOpen}
           {#if phoneUI}
             <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
@@ -6191,9 +6209,13 @@
   /* Glass panels on phones: header and field are floating see-through
      cards; the messages scroll on under the field. */
   @media (max-width: 720px) {
-    :global(html.glass) .msg-stage { margin-bottom: calc(-1 * var(--below-h, 0px)); margin-top: calc(-1 * var(--above-h, 0px)); }
-    :global(html.glass) .messages { padding-bottom: calc(var(--below-h, 0px) + 10px); padding-top: calc(var(--above-h, 0px) + 10px); }
-    :global(html.glass) .active-chat > :global([data-gf]) { position: relative; z-index: 3; }
+    .active-chat.phone .msg-stage { margin-bottom: calc(-1 * var(--below-h, 0px)); margin-top: calc(-1 * var(--above-h, 0px)); }
+    .active-chat.phone .messages { padding-bottom: calc(var(--below-h, 0px) + 10px); padding-top: calc(var(--above-h, 0px) + 10px);
+      scroll-padding: var(--above-h, 0px) 0 var(--below-h, 0px); }
+    .active-chat.phone > :global([data-gf]) { position: relative; z-index: 3; }
+    /* Without glass (or without blur) what floats over the messages must
+       hide them. */
+    :global(html:is(:not(.glass), .wk-lowfx)) .active-chat.phone > :global(:is(.rec-bar, .room-tabs, .rkb, .channel-locked, .not-live-banner, .sb-reacts, .noshare-bar, .pin-bar, .mp)[data-gf]) { background-color: var(--bg-list); }
     :global(html.glass) .hm-drop {
       margin: 0 8px 6px; border: 1px solid color-mix(in srgb, var(--fg) 16%, transparent); border-radius: calc(18px * var(--rk, 1));
       background: var(--bg-surface, #12151d); box-shadow: 0 10px 30px -16px rgba(0,0,0,.7);
@@ -6833,11 +6855,6 @@
 
   /* Attach popup (Media / Article / Poll) */
   .attach-wrap { position: relative; display: flex; }
-  .attach-wrap.float { position: absolute; right: 16px; bottom: calc(100% + 8px); z-index: 6; animation: att-float .16s ease-out; }
-  .attach-wrap.float .attach-btn { width: 44px; height: 44px; border-radius: 50%; background: var(--bg-surface-2, var(--bg-input)); box-shadow: 0 6px 18px -6px rgba(0,0,0,.55); }
-  /* Not the phone sheet: with "left: auto" it shrank to a strip on the right. */
-  .attach-wrap.float .attach-pop:not(.sheet) { left: auto; right: 0; }
-  @keyframes att-float { from { opacity: 0; transform: translateY(8px) scale(.9); } }
   .attach-btn.open { color: var(--accent); background: var(--accent-soft); }
   .attach-pop {
     position: absolute; bottom: calc(100% + 8px); left: 0;
@@ -7511,29 +7528,77 @@
   .phone .back-btn { display: inline-flex; }
   .phone .chat-identity { display: flex; flex: 1; min-width: 0; align-items: center; gap: 8px; }
   .phone .chat-actions { gap: 0; flex-shrink: 0; }
-  .phone .chat-actions .icon-btn { width: 34px; height: 42px; }
-  :global(html.glass) .phone .chat-header {
-    background: transparent; padding: 0; border: 0; box-shadow: none;
+  /* A long name ends in "…" on one line — it used to wrap and grow the
+     header over the messages. */
+  .phone .peer-name { white-space: nowrap; overflow: hidden; }
+  .phone .peer-name :is(.pn-text, .group-name-btn, .room-switch) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .phone .peer-name > :global(:not(.pn-text):not(.group-name-btn):not(.room-switch)) { flex-shrink: 0; }
+  /* Phones: the header is three separate pieces, like the bottom bar — back,
+     the name, the actions: round, or square with "Panel shape → square".
+     Always the same height: the name and one line of status. */
+  .active-chat.phone .chat-header { margin: 6px 0 0; padding: 0 8px; gap: 6px; background: transparent; border: 0; box-shadow: none; border-radius: 0; }
+  .active-chat.phone .chat-header::before { display: none; }
+  .active-chat.phone .chat-header.clickable:hover { background: transparent; }
+  .active-chat.phone .chat-header.clickable:hover .peer-name { color: var(--fg); }
+  .active-chat.phone .chat-header :is(.back-btn, .chat-identity, .chat-actions) {
+    box-sizing: border-box; height: 46px; border: 1px solid color-mix(in srgb, var(--fg) 14%, transparent);
+    background: var(--bg-surface); border-radius: calc(23px * var(--rk, 1));
   }
-  :global(html.glass) .phone .chat-header::before { content: none; }
-  :global(html.glass) .phone .back-btn,
-  :global(html.glass) .phone .chat-identity,
-  :global(html.glass) .phone .chat-actions,
+  .active-chat.phone .chat-header .back-btn { width: 46px; }
+  .active-chat.phone .chat-header .chat-identity { padding: 0 10px 0 2px; overflow: hidden; }
+  .active-chat.phone .chat-header .chat-actions { padding: 0 3px; align-items: center; }
+  .active-chat.phone .chat-header .chat-actions .icon-btn { width: 40px; height: 40px; border-radius: calc(20px * var(--rk, 1)); }
+  .active-chat.phone .peer-info > :is(.now-playing, .peer-custom-status, .peer-status) {
+    margin-top: 1px; max-width: 100%; line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .active-chat.phone .peer-info > .now-playing { display: flex; }
+  .active-chat.phone .peer-status .activity-ind { min-width: 0; }
+  /* One status line only: "typing" wins, then music, then the person's status. */
+  .active-chat.phone .peer-info:has(.typing-ind) > :is(.now-playing, .peer-custom-status) { display: none; }
+  .active-chat.phone .peer-info:has(> .now-playing) > .peer-custom-status { display: none; }
+  .active-chat.phone .peer-info:not(:has(.typing-ind)):has(> :is(.now-playing, .peer-custom-status)) > .peer-status { display: none; }
   :global(html.glass) .phone .pin-bar {
     border: 1px solid var(--border);
     background: color-mix(in srgb, var(--bg-surface) 84%, transparent);
     border-radius: calc(14px * var(--rk, 1));
   }
-  :global(html.glass) .phone .back-btn { width: 42px; height: 48px; }
-  :global(html.glass) .phone .chat-identity { padding: 3px 6px; min-height: 48px; box-sizing: border-box; }
-  :global(html.glass) .phone .chat-actions { padding: 2px; }
   :global(html.glass) .phone .pin-bar { margin: 0 8px 6px; padding: 5px 8px; }
-  :global(html.glass.panels-square) .phone :is(.back-btn, .chat-identity, .chat-actions, .pin-bar) {
+  :global(html.glass.panels-square) .phone .pin-bar { border-radius: calc(8px * var(--rk, 1)); }
+  :global(html.panels-square) .active-chat.phone .chat-header :is(.back-btn, .chat-identity, .chat-actions, .chat-actions .icon-btn) {
     border-radius: calc(8px * var(--rk, 1));
   }
-  .phone .composer:not(.chan-bar) .input-wrap > .emoji-in { order: -1; }
-  .phone .composer:not(.chan-bar) > .attach-wrap { order: 1; }
-  .phone .composer:not(.chan-bar) > .send-btn { order: 2; }
+
+  /* Phones: not one solid bar — 📎, the field and the voice / send button
+     each stand on their own: circles, or squares with "Panel shape → square"
+     (the owner's layout). */
+  .active-chat.phone .composer { background: transparent; border: none; box-shadow: none; border-radius: 0;
+    margin: 0 0 6px; padding: 4px 8px; gap: 6px; align-items: flex-end; }
+  .active-chat.phone .composer::before { display: none; }
+  .active-chat.phone .composer :is(.attach-btn, .input-wrap, .input-wrap:focus-within, .cb-bell) {
+    background: var(--bg-surface);
+    border: 1px solid color-mix(in srgb, var(--fg) 14%, transparent);
+    box-shadow: none;
+  }
+  .active-chat.phone .composer :is(.attach-btn, .send-btn, .cb-bell) { box-sizing: border-box; width: 46px; height: 46px;
+    flex-shrink: 0; border-radius: calc(23px * var(--rk, 1)); }
+  /* A growing message: the field grows upwards, the buttons inside and
+     beside it stay on the last line (Telegram). */
+  .active-chat.phone .composer :is(.input-wrap, .input-wrap:focus-within) { box-sizing: border-box; min-height: 46px; align-items: flex-end;
+    padding: 6px 6px 6px 12px; border-radius: calc(23px * var(--rk, 1)); }
+  .active-chat.phone .composer .emoji-in { margin-bottom: 0; }
+  .active-chat.phone .composer .compose-expand { right: 8px; }
+  .active-chat.phone .composer .input-wrap:has(> .compose-expand):has(> .emoji-in) :global(.rich) { padding-right: 4px; }
+  :global(html.panels-square) .active-chat.phone .composer :is(.attach-btn, .input-wrap, .send-btn, .cb-bell) {
+    border-radius: calc(8px * var(--rk, 1)); }
+
+  /* "Glass": the separate pieces are see-through and blur what runs under
+     them — only where blur is on (without it the text would show through). */
+  :global(html.glass:not(.wk-lowfx)) .active-chat.phone :is(.chat-header :is(.back-btn, .chat-identity, .chat-actions), .composer :is(.attach-btn, .input-wrap, .input-wrap:focus-within, .cb-bell)) {
+    background: color-mix(in srgb, var(--bg-surface) var(--glass-a, 55%), transparent);
+    backdrop-filter: blur(var(--glass-blur, 12px)) saturate(1.5); -webkit-backdrop-filter: blur(var(--glass-blur, 12px)) saturate(1.5);
+  }
+  /* The "to the bottom" button sits above everything that floats below. */
+  .active-chat.phone .jump-btn { bottom: calc(var(--below-h, 0px) + 10px) !important; }
 
   /* Poll bubble */
   .bubble.poll-bubble { display: flex; flex-direction: column; gap: 4px; min-width: 240px; max-width: 360px; }
@@ -7635,7 +7700,7 @@
   }
   /* The blur lives on a pseudo-layer: a backdrop-filter on the bar itself would make it a
      "backdrop root", and popups inside it (attach menu, room list) couldn't blur the chat. */
-  /* A channel's bar (Telegram): one pill — my avatar, stickers, the text, 📎,
+  /* A channel's bar (Telegram): one pill — my avatar, 📎, the text, stickers,
      the round mic / send button; no separate boxes. */
   .composer.chan-bar { align-items: center; gap: 2px; margin: 6px 10px 8px; padding: 4px; border: 1px solid var(--border);
     border-radius: 999px; background: var(--bg-input); }
@@ -7680,9 +7745,8 @@
   @media (prefers-reduced-motion: reduce) { .as-dialog[open] { animation: none; } }
   .as-author { color: var(--accent); }
   .as-own { align-self: flex-end; font-size: 12.5px; font-weight: 600; color: var(--accent); margin: 0 4px 2px; }
-  .chan-bar .input-wrap { order: 1; background: transparent; border: none; box-shadow: none !important; padding-left: 4px; align-items: center; }
-  .chan-bar .input-wrap > .emoji-in { order: -1; }
-  .chan-bar .attach-wrap { order: 2; }
+  .chan-bar .input-wrap { order: 1; background: transparent; border: none; box-shadow: none !important; padding-left: 8px; align-items: center; }
+  .chan-bar .attach-wrap { order: 1; }
   .cb-bell { width: 38px; height: 38px; flex-shrink: 0; align-self: center; border: none; background: transparent; color: var(--fg-muted); border-radius: 50%; display: grid; place-items: center; cursor: pointer; }
   .cb-bell.off { color: var(--fg-dim); }
   .cb-bell :global(svg) { width: 21px; height: 21px; }

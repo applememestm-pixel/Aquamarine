@@ -71,13 +71,23 @@ export function startBgNotify(): () => void {
   if (!inTauri()) return () => {};
   const send = (cmd: string, args: Record<string, unknown>) =>
     void import("@tauri-apps/api/core").then((c) => c.invoke(cmd, args)).catch(() => {});
-  let bgOn: boolean | null = null;
-  const unBg = PHONE ? settings.subscribe((st) => {
-    const on = st.bgConnection !== false;
-    if (on === bgOn) return;
-    bgOn = on;
-    send("bg_sync_set", { on });
-  }) : () => {};
+  // Background connection, with the line the reminder after a reboot shows,
+  // in the UI language.
+  let bgSent = "";
+  let unBg = () => {};
+  let bgDone = false;
+  if (PHONE) void import("./i18n").then((i18n) => {
+    if (bgDone) return;
+    const push = () => {
+      const on = get(settings).bgConnection !== false;
+      const reminder = i18n.tr("Open the app to receive new messages again");
+      if (`${on} ${reminder}` === bgSent) return;
+      bgSent = `${on} ${reminder}`;
+      send("bg_sync_set", { on, reminder });
+    };
+    const subs = [settings.subscribe(push), i18n.lang.subscribe(push)];
+    unBg = () => subs.forEach((off) => off());
+  });
   const reportsFront = PHONE && !/android/i.test(navigator.userAgent);
   const vis = () => {
     const front = document.visibilityState === "visible";
@@ -131,6 +141,7 @@ export function startBgNotify(): () => void {
           archived: [...get(cp.archived)],
           widget_text: s.widgetText !== false,
           widget_empty: i18n.tr("No new messages"),
+          call_text: i18n.tr("Incoming call"),
         } });
       });
     };
@@ -139,6 +150,7 @@ export function startBgNotify(): () => void {
   });
   return () => {
     stopped = true;
+    bgDone = true;
     unBg();
     clearInterval(beat);
     document.removeEventListener("visibilitychange", vis);

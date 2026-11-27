@@ -61,7 +61,7 @@ pub const LEAKED_NODE_IDS: &[&str] = &["1271400a10f36e27afb42bf3277bc1b1"];
 
 /// Write a file only its owner can read (the node key, the federation
 /// config with its secret).
-fn write_private(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+pub(crate) fn write_private(path: &std::path::Path, text: &str) -> std::io::Result<()> {
     #[cfg(unix)]
     {
         use std::io::Write;
@@ -77,6 +77,8 @@ fn write_private(path: &std::path::Path, text: &str) -> std::io::Result<()> {
     }
 }
 const SKEW_MS: i64 = 5 * 60 * 1000;
+/// Signatures already taken (replay.rs).
+const SEEN_FILE: &str = "aqua-fed-seen.log";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct FedConfig {
@@ -400,6 +402,8 @@ pub struct Fed {
     key: aqua_core::crypto::SignSecret,
     /// Vouches peers sent back to our hellos, to be kept (`absorb_vouches`).
     got_vouches: std::sync::Mutex<Vec<Vouch>>,
+    /// Which signed requests we have already taken.
+    replay: Arc<crate::replay::Replay>,
 }
 
 pub type FedSlot = Arc<std::sync::RwLock<Option<Arc<Fed>>>>;
@@ -464,7 +468,11 @@ impl Fed {
             .user_agent(concat!("aqua-server/", env!("CARGO_PKG_VERSION")))
             .build()
             .ok()?;
-        Some(Arc::new(Self { cfg, http, key, got_vouches: std::sync::Mutex::new(Vec::new()) }))
+        // An absolute path: the same table whatever the working folder later is.
+        let seen = (!cfg.ephemeral && !cfg.dir.as_os_str().is_empty())
+            .then(|| std::env::current_dir().unwrap_or_default().join(&cfg.dir).join(SEEN_FILE));
+        let replay = crate::replay::Replay::shared(seen, SKEW_MS, now_ms());
+        Some(Arc::new(Self { cfg, http, key, got_vouches: std::sync::Mutex::new(Vec::new()), replay }))
     }
 
     /// The `x-aqua-fed` header for a request (fedtunnel.rs signs its polls).
@@ -525,7 +533,7 @@ impl Fed {
         aqua_core::crypto::SignPublic::from_bytes(key)
             .verify(v2_message(method, path, ts, nonce, from, to, body).as_bytes(), &sig)
             .ok()?;
-        first_use(&format!("v2:{from}:{nonce}"), ts).then(|| from.to_string())
+        self.replay.take(&format!("v2:{from}:{nonce}"), ts, now_ms()).then(|| from.to_string())
     }
 
     /// Add both signatures to a request to `peer`.
@@ -655,7 +663,7 @@ impl Fed {
         // AQUA-SEC-009: a signed request was good for its whole ±5-minute
         // window, as many times as anyone sent it again. Each signature is
         // now taken once (signatures cover the time, so a retry signs anew).
-        first_use(sig, ts)
+        self.replay.take(sig, ts, now_ms())
     }
 
     /// Is `peer` a relay we still talk to (1.2.0 or newer)? Asked once in a
@@ -1020,23 +1028,6 @@ pub async fn names_hello(fed: &Fed) -> Vec<String> {
     known.dedup();
     known.retain(|u| *u != me && !fed.cfg.peers.contains(u));
     known
-}
-
-/// Signatures seen within the clock window: `true` the first time only.
-fn first_use(sig: &str, ts: i64) -> bool {
-    static SEEN: std::sync::Mutex<Option<std::collections::HashMap<String, i64>>> = std::sync::Mutex::new(None);
-    let Ok(mut g) = SEEN.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) else { return true };
-    let seen = g.get_or_insert_with(std::collections::HashMap::new);
-    let now = now_ms();
-    if seen.len() > 20_000 {
-        seen.retain(|_, t| (now - *t).abs() <= SKEW_MS);
-    }
-    if seen.len() > 200_000 {
-        // Flooded with valid signatures (only a holder of the secret can make
-        // them): stop remembering rather than grow without end.
-        seen.clear();
-    }
-    seen.insert(sig.to_string(), ts).is_none()
 }
 
 /// Where we are in a peer's rows: `(updated_at, key)` of the last row read
@@ -2108,14 +2099,6 @@ mod cursor_tests {
         assert_eq!(std::fs::read_to_string(dir.path().join(super::NODE_KEY_FILE)).unwrap().trim(), c.node_key);
         // Not on the list: kept.
         assert_eq!(super::FedConfig::load_in(dir.path()).node_key, c.node_key);
-    }
-
-    #[test]
-    fn a_signature_is_taken_once() {
-        let ts = super::now_ms();
-        assert!(super::first_use("sig-a", ts));
-        assert!(!super::first_use("sig-a", ts), "replayed");
-        assert!(super::first_use("sig-b", ts));
     }
 
     #[test]

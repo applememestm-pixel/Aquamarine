@@ -97,14 +97,38 @@ pub fn list_chats(state: State<'_, StdMutex<AppState>>) -> Result<Vec<ChatSummar
     Ok(summaries)
 }
 
+/// A chat's history, or only its last `limit` messages.
 #[tauri::command]
 pub fn get_messages(
     state: State<'_, StdMutex<AppState>>,
     peer_id: String,
+    limit: Option<usize>,
 ) -> Result<Vec<ChatMessage>, String> {
+    Ok(shown_history(&state, &peer_id, limit))
+}
+
+/// The open chat's refresh: what changed since the answer named `since`.
+#[tauri::command(async)]
+pub fn get_messages_delta(
+    state: State<'_, StdMutex<AppState>>,
+    peer_id: String,
+    since: Option<u64>,
+) -> Result<crate::history_delta::MessagesDelta, String> {
+    let msgs = shown_history(&state, &peer_id, None);
+    Ok(crate::history_delta::delta(&peer_id, since, msgs))
+}
+
+fn shown_history(
+    state: &StdMutex<AppState>,
+    peer_id: &str,
+    limit: Option<usize>,
+) -> Vec<ChatMessage> {
     let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let mut msgs = s.chats.get(&peer_id).map(|c| c.messages.clone()).unwrap_or_default();
-    if let Some(group) = s.groups.get(&peer_id).filter(|g| g.kind == "channel") {
+    let mut msgs = s.chats.get(peer_id).map(|c| {
+        let from = limit.map_or(0, |n| c.messages.len().saturating_sub(n));
+        c.messages[from..].to_vec()
+    }).unwrap_or_default();
+    if let Some(group) = s.groups.get(peer_id).filter(|g| g.kind == "channel") {
         let privileged = s.username.as_deref().is_some_and(|u| group.is_admin(u));
         let now = crate::state::msg_secs();
         for msg in &mut msgs {
@@ -120,7 +144,7 @@ pub fn get_messages(
     }
     drop(s);
     forget_missing_files(&mut msgs);
-    Ok(msgs)
+    msgs
 }
 
 /// A file's local copy that isn't on this device — history restored from a

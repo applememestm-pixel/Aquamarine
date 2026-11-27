@@ -51,8 +51,8 @@ export function wanted(chatId: string, m: ChatMessage): boolean {
 
 async function fetchChat(chatId: string) {
   let msgs: ChatMessage[];
-  try { msgs = await api.getMessages(chatId); } catch { return; }
-  for (const m of msgs.slice(-LOOK_BACK)) {
+  try { msgs = await api.getMessages(chatId, LOOK_BACK); } catch { return; }
+  for (const m of msgs) {
     const key = `${chatId}/${m.id}`;
     if (tried.has(key) || !wanted(chatId, m)) continue;
     tried.add(key);

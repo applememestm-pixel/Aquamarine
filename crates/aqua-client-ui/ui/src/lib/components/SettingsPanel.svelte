@@ -84,7 +84,7 @@
   import { ghost, blocked, setBlocked } from "../ghost";
   import { lockConf, setAutoLock, lockNow, removePasscode, passcodeSetupOpen, biometricAvailable, setBiometric } from "../lock";
   import { t, lang, LANGS, tr } from "../i18n";
-  import { chats, activeId, loadActiveMessages } from "../stores";
+  import { chats, activeId, loadActiveMessages, forgetHistory } from "../stores";
   import { BUILTIN_SOUNDS, customSounds, refreshSounds, playSound, soundLabel, addSoundBytes } from "../sounds";
   import { exportThemeToFile, sendThemeToChat, pickAndApplyTheme } from "../themeShare";
   import { askConfirm } from "./Confirm.svelte";
@@ -2076,7 +2076,7 @@
             <span class="switch" class:on={$inAppBrowser}></span>
           </button>
         {/if}
-        <button class="toggle-row" onclick={() => { toggle("showSeconds"); void loadActiveMessages(); void api.listChats().then((c) => chats.set(c)).catch(() => {}); }}>
+        <button class="toggle-row" onclick={() => { toggle("showSeconds"); forgetHistory(); void loadActiveMessages(); void api.listChats().then((c) => chats.set(c)).catch(() => {}); }}>
           <div class="tr-text">
             <div class="tr-title">{$t("Seconds in message times")}</div>
             <div class="tr-sub">{$t("12:30:45 instead of 12:30 (for messages from this version on).")}</div>
@@ -2601,7 +2601,7 @@
         <div class="label">{$t("Lightweight mode")}</div>
         <div class="row">
           <span class="row-label">{$t("Lighter effects")}</span>
-          <Select class="sel" value={$settings.liteFx ?? "auto"} options={[{ value: "auto", label: $t("Auto (weak devices)") }, { value: "on", label: $t("On") }, { value: "off", label: $t("Off") }]}
+          <Select class="sel" value={$settings.liteFx ?? "auto"} options={[{ value: "auto", label: $t("Auto (phones and weak devices)") }, { value: "on", label: $t("On") }, { value: "off", label: $t("Off") }]}
             onchange={(v) => settings.update((x) => ({ ...x, liteFx: v as "auto" | "on" | "off" }))} />
         </div>
         <div class="foot-note">{$t("No glass blur, no moving glow, flat shadows, fewer looping animations — smoother on weaker phones and computers. Looks almost the same.")}</div>

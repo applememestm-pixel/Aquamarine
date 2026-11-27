@@ -85,7 +85,9 @@
   import Select from "./Select.svelte";
   import { t, tr } from "../i18n";
   import { avatars } from "../people";
-  import { IS_MOBILE } from "../platform";
+  import { IS_ANDROID, IS_MOBILE } from "../platform";
+  import { watchCallService, watchRinging } from "../callService";
+  import { groupCall } from "../groupCall";
   import { displayName } from "../contacts";
   import { onMount } from "svelte";
   import { get } from "svelte/store";
@@ -209,6 +211,11 @@
   // ---------------------------------------------------------------------------
   // Lifecycle
   // ---------------------------------------------------------------------------
+  // Android: the microphone keeps working in the background during a call.
+  onMount(() => IS_ANDROID ? watchCallService(callState, groupCall, api.callServiceSet) : undefined);
+  // Phones: a ringing call also shows a notification when the app is away.
+  onMount(() => IS_MOBILE ? watchRinging(callState, api.notifyCall) : undefined);
+
   onMount(() => {
     const unsubSig = events.onCallSignal((e) => {
       const { from, signal } = e;
@@ -904,7 +911,20 @@
   function closeWatch() { watch = false; zoom = { s: 1, x: 0, y: 0 }; }
   $effect(() => { if (watch) return onBack(closeWatch); });
   // Phones: "back" folds the full-screen call into the strip (Telegram).
-  $effect(() => { if (IS_MOBILE && expanded && !showStage && ($callState.kind === "outgoing" || $callState.kind === "incoming" || $callState.kind === "connected")) return onBack(() => { expanded = false; }); });
+  // (Derived: a change of state inside the call mustn't move this entry above
+  // a sheet opened later.)
+  let liveCall = $derived($callState.kind === "outgoing" || $callState.kind === "incoming" || $callState.kind === "connected");
+  $effect(() => { if (IS_MOBILE && expanded && liveCall) return onBack(() => { expanded = false; }); });
+  $effect(() => { if (IS_MOBILE && (devOpen || goLiveOpen)) return onBack(() => closePops()); });
+  function closePops() { goLiveOpen = false; volOpen = false; devOpen = false; }
+  // Phones: a minimised call is a bar above the whole app (Telegram); the
+  // app moves down under it (app.css), so it covers nothing.
+  $effect(() => {
+    const k = $callState.kind;
+    if (!IS_MOBILE || expanded || k === "idle") return;
+    document.documentElement.classList.add("call-strip");
+    return () => document.documentElement.classList.remove("call-strip");
+  });
   $effect(() => { if (watch && !rScreen) closeWatch(); });
   function zoomEnd(e: TouchEvent) {
     if (e.touches.length) { zoomStart(e); return; }
@@ -1373,8 +1393,7 @@
   </div>
 {/snippet}
 
-{#snippet devicesPanel()}
-  <div class="pop dev" role="dialog" aria-label={$t("Microphone and sound")}>
+{#snippet devicesBody()}
     <div class="pop-label">{$t("Microphone")}</div>
     <Select class="pop-select" value={$callSettings.micId}
       options={[{ value: "default", label: $t("System default") }, ...devices.mics.filter((d) => d.deviceId && d.deviceId !== "default").map((d) => ({ value: d.deviceId, label: d.label || $t("Microphone") }))]}
@@ -1399,13 +1418,27 @@
     </div>
     <label class="pop-check"><input type="checkbox" checked={$callSettings.noiseSuppression}
       onchange={(e) => { callSettings.update((c) => ({ ...c, noiseSuppression: (e.target as HTMLInputElement).checked })); void switchMic($callSettings.micId); }} /> {$t("Noise suppression")}</label>
-    <button class="pop-btn" onclick={() => { devOpen = false; openSettings("voice"); }}>{$t("All voice & video settings")}</button>
+    <button class="pop-btn" onclick={() => { devOpen = false; if (IS_MOBILE) expanded = false; openSettings("voice"); }}>{$t("All voice & video settings")}</button>
+{/snippet}
+
+{#snippet devicesPanel()}
+  <div class="pop dev" role="dialog" aria-label={$t("Microphone and sound")}>
+    {@render devicesBody()}
   </div>
 {/snippet}
 
-{#snippet volumePanel()}
-  <div class="pop vol" role="dialog" aria-label={$t("Volume")}>
-    <div class="pop-title">{peerName}</div>
+<!-- Phones: one sheet for everything about sound — the row of round buttons
+     had no room for three of them (Hang up ended up off the screen). -->
+{#snippet phoneSheet()}
+  <div class="pop dev" role="dialog" aria-label={$t("Microphone and sound")}>
+    <div class="pop-head"><b>{$t("Microphone and sound")}</b><button data-x onclick={closePops} aria-label={$t("Close")}>×</button></div>
+    <label class="pop-check"><input type="checkbox" checked={deafened} onchange={toggleDeafen} /> {$t("Deafen")}</label>
+    {@render volumeBody()}
+    {@render devicesBody()}
+  </div>
+{/snippet}
+
+{#snippet volumeBody()}
     <div class="pop-label">{$t("Voice volume")}</div>
     <div class="pop-range">
       <input type="range" min="0" max="1" step="0.01" value={$callSettings.peerVolume[peerId] ?? 1}
@@ -1418,6 +1451,12 @@
         oninput={(e) => setPeerVolume("streamVolume", parseFloat((e.target as HTMLInputElement).value))} />
       <span>{Math.round(($callSettings.streamVolume[peerId] ?? 1) * 100)}%</span>
     </div>
+{/snippet}
+
+{#snippet volumePanel()}
+  <div class="pop vol" role="dialog" aria-label={$t("Volume")}>
+    <div class="pop-title">{peerName}</div>
+    {@render volumeBody()}
   </div>
 {/snippet}
 
@@ -1428,7 +1467,9 @@
       {@html $callMuted ? I.micOff : I.mic}
       {#if $callSettings.pushToTalk && !$callMuted}<span class="ptt" class:held={pttHeld}>PTT</span>{/if}
     </button>
-    <button class="cb" class:off={deafened} onclick={toggleDeafen} title={$t("Deafen (Ctrl+Shift+D)")}>{@html deafened ? I.headOff : I.head}</button>
+    {#if !IS_MOBILE}
+      <button class="cb" class:off={deafened} onclick={toggleDeafen} title={$t("Deafen (Ctrl+Shift+D)")}>{@html deafened ? I.headOff : I.head}</button>
+    {/if}
     <button class="cb" class:on={!!camStream} onclick={toggleCam} title={$t(camStream ? "Turn camera off" : "Turn camera on")}>{@html camStream ? I.cam : I.camOff}</button>
     {#if touchUi && camStream}
       <button class="cb" onclick={flipCam} title={$t(facing === "user" ? "Back camera" : "Front camera")} aria-label={$t("Switch camera")}>{@html I.flip}</button>
@@ -1439,13 +1480,15 @@
         {#if goLiveOpen}{@render goLivePanel()}{/if}
       </div>
     {/if}
+    {#if !IS_MOBILE}
+      <div class="anchor">
+        <button class="cb" class:on={volOpen} onclick={() => { goLiveOpen = false; devOpen = false; volOpen = !volOpen; }} title={$t("Volume")}>{@html I.vol}</button>
+        {#if volOpen}{@render volumePanel()}{/if}
+      </div>
+    {/if}
     <div class="anchor">
-      <button class="cb" class:on={volOpen} onclick={() => { goLiveOpen = false; devOpen = false; volOpen = !volOpen; }} title={$t("Volume")}>{@html I.vol}</button>
-      {#if volOpen}{@render volumePanel()}{/if}
-    </div>
-    <div class="anchor">
-      <button class="cb" class:on={devOpen} onclick={openDevices} title={$t("Microphone and sound")}>{@html I.gear}</button>
-      {#if devOpen}{@render devicesPanel()}{/if}
+      <button class="cb" class:on={devOpen} class:off={IS_MOBILE && deafened} onclick={openDevices} title={$t("Microphone and sound")} aria-label={$t("Microphone and sound")}>{@html IS_MOBILE ? (deafened ? I.headOff : I.vol) : I.gear}</button>
+      {#if devOpen}{#if IS_MOBILE}{@render phoneSheet()}{:else}{@render devicesPanel()}{/if}{/if}
     </div>
     <button class="cb hang" onclick={() => hangup("local-hangup")} title={$t("Hang up")}>{@html I.hang}</button>
   </div>
@@ -1501,10 +1544,13 @@
         {@render bars()}
         <button class="tb" class:on={statsOpen} onclick={() => { statsOpen = !statsOpen; patchCallSettings({ showStats: statsOpen }); }} title={$t("Stream info")}>{@html I.stats}</button>
         <button class="tb" onclick={() => (expanded = false)} title={$t("Minimize")}>{@html I.shrink}</button>
-        <button class="tb" onclick={toggleFullscreen} title={$t(fullscreen ? "Exit fullscreen (Esc)" : "Fullscreen")}>{@html I.full}</button>
+        {#if !IS_MOBILE}
+          <button class="tb" onclick={toggleFullscreen} title={$t(fullscreen ? "Exit fullscreen (Esc)" : "Fullscreen")}>{@html I.full}</button>
+        {/if}
       </div>
     </header>
-    <div class="st-main">
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div class="st-main" onpointerdown={() => { if (IS_MOBILE) closePops(); }}>
       {#if focused}{@render tile(focused, true)}{/if}
       {#if statsOpen}{@render statsPanel()}{/if}
     </div>
@@ -1619,12 +1665,10 @@
   .ava.lg { width: 96px; height: 96px; font-size: 38px; }
   .ava.md { width: 44px; height: 44px; font-size: 18px; }
   .ava.sm { width: 28px; height: 28px; font-size: 12px; }
-  /* Who's talking: a neon ring and glow in the theme's colour (the
-     Aquamarine theme — turquoise), breathing while they speak. */
-  .ava.speaking { box-shadow: 0 0 0 2px var(--bg-surface), 0 0 0 4px var(--accent), 0 0 18px 4px var(--accent-glow, color-mix(in srgb, var(--accent) 55%, transparent));
-    animation: talk 1.1s ease-in-out infinite alternate; }
-  .ava.sm.speaking { box-shadow: 0 0 0 2px var(--bg-surface), 0 0 0 3.5px var(--accent), 0 0 10px 2px var(--accent-glow, color-mix(in srgb, var(--accent) 55%, transparent)); }
-  @keyframes talk { to { filter: drop-shadow(0 0 6px color-mix(in srgb, var(--accent) 70%, transparent)); } }
+  /* Who's talking: a ring in the theme's colour. No glow and no looping
+     animation — it repainted every frame and cost phones battery. */
+  .ava.speaking { box-shadow: 0 0 0 2px var(--bg-surface), 0 0 0 4px var(--accent); }
+  .ava.sm.speaking { box-shadow: 0 0 0 2px var(--bg-surface), 0 0 0 3.5px var(--accent); }
   .ava-badge {
     position: absolute; right: -3px; bottom: -3px;
     width: 18px; height: 18px; border-radius: var(--ava-r, 50%);
@@ -1774,7 +1818,7 @@
     border: 1px solid var(--border-strong);
     border-radius: calc(16px * var(--rk, 1));
     padding: 14px;
-    box-shadow: 0 24px 48px -12px rgba(0, 0, 0, 0.6), var(--shadow-accent);
+    box-shadow: 0 24px 48px -12px rgba(0, 0, 0, 0.6);
     display: flex; flex-direction: column; gap: 12px;
     animation: slide-in 0.2s ease-out;
   }
@@ -1814,7 +1858,7 @@
   .mini .stats { position: static; width: auto; }
   .live-dot {
     width: 7px; height: 7px; border-radius: 50%;
-    background: #3BA55D; box-shadow: 0 0 6px #3BA55D;
+    background: #3BA55D;
     display: inline-block;
   }
   .dots::after { content: '...'; animation: ellipsis 1.5s steps(4, end) infinite; }
@@ -1882,7 +1926,7 @@
     transition: box-shadow 0.12s ease;
   }
   .tile.big { cursor: default; }
-  .tile.speaking, .tile.me-speaking { box-shadow: inset 0 0 0 3px var(--accent), inset 0 0 26px -6px var(--accent), 0 0 22px -4px var(--accent-glow, color-mix(in srgb, var(--accent) 55%, transparent)); }
+  .tile.speaking, .tile.me-speaking { box-shadow: inset 0 0 0 3px var(--accent); }
   .tile video { width: 100%; height: 100%; display: block; object-fit: cover; background: #000; }
   .tile video.contain { object-fit: contain; }
   .tile.big video.contain { touch-action: none; transform-origin: center; }
@@ -1922,4 +1966,76 @@
   .stats em { color: rgba(255, 255, 255, 0.5); font-style: normal; }
   .mini .stats { background: var(--bg-input); color: var(--fg-muted); border-color: var(--border); }
   .mini .stats em { color: var(--fg-dim); }
+  /* ---------- phones (platform, not window width) ---------- */
+  .pop-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--fg); font-size: 15px; }
+  .pop-head button { width: 36px; height: 36px; border: none; border-radius: 50%; background: var(--bg-input); color: var(--fg); font-size: 22px; line-height: 1; }
+
+  /* The minimised call: a bar under the status bar, above the whole app. */
+  :global(html.phone) .mini {
+    top: var(--sat, env(safe-area-inset-top, 0px)); bottom: auto; left: 0; right: 0; width: auto; height: 52px; box-sizing: border-box;
+    z-index: 90; flex-direction: row; align-items: center; gap: 8px; padding: 0 10px; border: none; border-bottom: 1px solid var(--border);
+    border-radius: 0; box-shadow: none; animation: none;
+  }
+  :global(html.phone) .mini-top { flex: 1; min-width: 0; gap: 8px; cursor: pointer; }
+  :global(html.phone) :is(.mini-video, .mini-me, .mini-statsbtn), :global(html.phone) .mini :is(.bars, .stats, .anchor) { display: none; }
+  :global(html.phone) .mini .ava { width: 34px; height: 34px; font-size: 14px; }
+  :global(html.phone) .mini .controls { gap: 8px; margin: 0; flex-wrap: nowrap; }
+  :global(html.phone) .mini .controls .cb { width: 38px; height: 38px; }
+  :global(html.phone) .mini .controls > .cb:not(.hang):not(.accept):not(:first-child) { display: none; }
+
+  /* The video call: the picture fills the screen, the bars lie over it,
+     clear of the status bar and the navigation bar (Telegram). */
+  :global(html.phone) .stage { inset: 0; display: block; border: none; border-radius: 0; background: #000; z-index: 400; animation: none; }
+  :global(html.phone) .st-main { position: absolute; inset: 0; padding: 0; }
+  :global(html.phone) .st-main > :global(.tile) { border-radius: 0; }
+  :global(html.phone) .st-main :is(.tile-tag, .tile-res) { display: none; }
+  :global(html.phone) .st-head {
+    position: absolute; top: 0; left: 0; right: 0; z-index: 3; gap: 8px; background: rgba(0, 0, 0, .45);
+    padding: calc(var(--sat, env(safe-area-inset-top, 0px)) + 8px) calc(var(--sar, env(safe-area-inset-right, 0px)) + 8px) 8px calc(var(--sal, env(safe-area-inset-left, 0px)) + 12px);
+  }
+  :global(html.phone) .st-peer { flex: 1; }
+  :global(html.phone) .st-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 16px; }
+  :global(html.phone) .st-time { flex-shrink: 0; }
+  :global(html.phone) .st-tools { flex-shrink: 0; }
+  :global(html.phone) .tb { width: 42px; height: 42px; color: #fff; }
+  :global(html.phone) .tb :global(svg) { width: 21px; height: 21px; }
+  :global(html.phone) .st-strip {
+    position: absolute; z-index: 2; flex-direction: column; height: auto; padding: 0; gap: 8px;
+    top: calc(var(--sat, env(safe-area-inset-top, 0px)) + 68px); right: calc(var(--sar, env(safe-area-inset-right, 0px)) + 10px);
+  }
+  :global(html.phone) .st-strip > :global(.tile) { width: 92px; height: 120px; border: 1px solid rgba(255, 255, 255, .18); }
+  :global(html.phone) .st-controls {
+    position: absolute; bottom: 0; left: 0; right: 0; z-index: 3;
+    padding: 0 8px calc(var(--sab, env(safe-area-inset-bottom, 0px)) + 14px);
+  }
+  :global(html.phone) .st-controls .controls { width: 100%; max-width: 420px; justify-content: space-evenly; gap: 4px; background: rgba(0, 0, 0, .55); padding: 10px 6px; box-sizing: border-box; }
+  :global(html.phone) .st-controls .controls :global(.cb) { width: min(50px, 13vw); height: min(50px, 13vw); }
+  :global(html.phone) .st-controls .controls :global(.cb.hang) { width: min(60px, 15vw); }
+  :global(html.phone) .stage .cb { background: rgba(255, 255, 255, .16); }
+  :global(html.phone) .stage .cb.on { background: #fff; color: #06070C; }
+  :global(html.phone) .stage .cb.off { background: rgba(237, 66, 69, .35); color: #fff; }
+  :global(html.phone) .stage .cb.live, :global(html.phone) .stage .cb.hang { background: #ED4245; color: #fff; }
+  /* Stream info leaves room for the small pictures on the right. */
+  :global(html.phone) .stage .stats { top: calc(var(--sat, env(safe-area-inset-top, 0px)) + 66px); left: 8px; width: min(460px, calc(100% - 120px)); }
+  /* Pop-ups: a sheet over the buttons, never past the screen's edges. */
+  :global(html.phone) :is(.pop, .pop.vol, .pop.dev) {
+    position: fixed; top: auto; transform: none; width: auto; max-width: 460px; margin: 0 auto; box-sizing: border-box; overflow-y: auto;
+    left: calc(var(--sal, env(safe-area-inset-left, 0px)) + 8px); right: calc(var(--sar, env(safe-area-inset-right, 0px)) + 8px);
+    bottom: calc(var(--sab, env(safe-area-inset-bottom, 0px)) + 94px);
+    max-height: calc(100dvh - var(--sat, env(safe-area-inset-top, 0px)) - var(--sab, env(safe-area-inset-bottom, 0px)) - 108px);
+  }
+  :global(html.phone) .tgc-b { font-size: 12px; }
+  :global(html.phone) .tgc-b span { white-space: nowrap; }
+
+  /* Phone held sideways: smaller face, small pictures in a row. */
+  @media (max-height: 520px) {
+    :global(html.phone) .tgc-mid { padding-bottom: 0; gap: 4px; }
+    :global(html.phone) .tgc-ava { width: 72px; height: 72px; font-size: 30px; margin-bottom: 4px; }
+    :global(html.phone) .tgc-name { font-size: 20px; }
+    :global(html.phone) .tgc { padding-bottom: calc(var(--sab, env(safe-area-inset-bottom, 0px)) + 8px); }
+    :global(html.phone) .tgc-b { gap: 4px; }
+    :global(html.phone) .tgc-b i { width: 50px; height: 50px; }
+    :global(html.phone) .st-strip { flex-direction: row; }
+    :global(html.phone) .st-strip > :global(.tile) { width: 112px; height: 72px; }
+  }
 </style>

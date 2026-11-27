@@ -168,4 +168,6 @@
     .wn-bg { padding: 0; }
     .wn { width: 100%; height: 100%; max-height: none; border-radius: 0; border: none; padding-top: var(--sat, env(safe-area-inset-top, 0px)); padding-bottom: var(--sab, env(safe-area-inset-bottom, 0px)); }
   }
+  /* Weak phones: the blobs stand still. */
+  :global(html.wk-lowfx) .art i { animation: none; }
 </style>

@@ -16,6 +16,8 @@ package app.aquamarine.messenger
 // project next to MainActivity by CI and android/patch-project.sh.
 
 import android.Manifest
+import android.content.BroadcastReceiver
+import android.app.ActivityManager
 import android.app.Activity
 import android.app.Notification
 import android.app.NotificationChannel
@@ -58,6 +60,19 @@ class RelayArgs {
 }
 
 @InvokeArg
+class CallArgs {
+  var on: Boolean = false
+  /** The notification's line, in the UI language. */
+  var text: String? = null
+}
+
+@InvokeArg
+class SyncArgs {
+  /** The reminder after a reboot, in the UI language. */
+  var reminder: String? = null
+}
+
+@InvokeArg
 class UrlArgs {
   var url: String = ""
 }
@@ -78,7 +93,6 @@ class WidgetArgs {
   var data: String = "{}"
 }
 
-@TauriPlugin
 /** ksWrap: the vault master key (hex) to wrap. */
 @InvokeArg
 class KsWrapArgs {
@@ -131,6 +145,9 @@ object AquaKeystore {
   }
 }
 
+// The annotation is what keeps this class and its commands in the shrunk
+// release APK (tools/check_android.py).
+@TauriPlugin
 class AquaRelayPlugin(private val activity: Activity) : Plugin(activity) {
   /** Wrap the vault master key with the Keystore key (state.rs). */
   @Command
@@ -178,6 +195,10 @@ class AquaRelayPlugin(private val activity: Activity) : Plugin(activity) {
    *  without it Android froze the app and messages came only when opened. */
   @Command
   fun syncStart(invoke: Invoke) {
+    AquaPrefs.setSync(activity, true)
+    invoke.parseArgs(SyncArgs::class.java).reminder?.let { AquaPrefs.setReminder(activity, it) }
+    // The app is open again: the reminder after a reboot has done its job.
+    (activity.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(7793)
     if (Build.VERSION.SDK_INT >= 33 &&
       activity.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
       activity.requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 7791)
@@ -191,8 +212,47 @@ class AquaRelayPlugin(private val activity: Activity) : Plugin(activity) {
     }
   }
 
+  /** A call is on (AquaCallService) or over. Started only while the app is
+   *  on screen: Android refuses microphone / camera services from the
+   *  background. The page repeats the call until it succeeds. */
+  @Command
+  fun callService(invoke: Invoke) {
+    val a = invoke.parseArgs(CallArgs::class.java)
+    val i = Intent(activity, AquaCallService::class.java)
+    try {
+      if (!a.on) {
+        activity.stopService(i)
+        AquaCallService.types = -1
+        invoke.resolve(JSObject().put("ok", true))
+        return
+      }
+      if (activity.checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+        invoke.reject("no microphone permission yet")
+        return
+      }
+      if (AquaCallService.types == AquaCallService.wantedTypes(activity)) {
+        invoke.resolve(JSObject().put("ok", true))
+        return
+      }
+      val state = ActivityManager.RunningAppProcessInfo()
+      ActivityManager.getMyMemoryState(state)
+      if (state.importance > ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND) {
+        invoke.reject("the app is not on screen")
+        return
+      }
+      a.text?.let { i.putExtra("text", it) }
+      // startService, not startForegroundService: if Android refuses the
+      // foreground type, the service just stops instead of crashing the app.
+      activity.startService(i)
+      invoke.resolve(JSObject().put("ok", true))
+    } catch (e: Exception) {
+      invoke.reject(e.message ?: "can't start")
+    }
+  }
+
   @Command
   fun syncStop(invoke: Invoke) {
+    AquaPrefs.setSync(activity, false)
     activity.stopService(Intent(activity, AquaSyncService::class.java))
     invoke.resolve(JSObject().put("ok", true))
   }
@@ -368,6 +428,119 @@ class AquaSyncService : Service() {
       return START_NOT_STICKY
     }
     return START_STICKY
+  }
+}
+
+/** What native code must know without the app running. */
+object AquaPrefs {
+  private const val FILE = "aqua_native"
+  fun setSync(c: Context, on: Boolean) =
+    c.getSharedPreferences(FILE, Context.MODE_PRIVATE).edit().putBoolean("sync", on).apply()
+  fun sync(c: Context): Boolean =
+    c.getSharedPreferences(FILE, Context.MODE_PRIVATE).getBoolean("sync", false)
+  fun setReminder(c: Context, text: String) =
+    c.getSharedPreferences(FILE, Context.MODE_PRIVATE).edit().putString("reminder", text).apply()
+  fun reminder(c: Context): String =
+    c.getSharedPreferences(FILE, Context.MODE_PRIVATE).getString("reminder", null)
+      ?: "Open the app to receive new messages again"
+}
+
+/** During a call: an ongoing notification that lets the microphone and the
+ *  camera keep working when the app is in the background or the screen is
+ *  off. Without it Android cuts them and the call goes silent. */
+class AquaCallService : Service() {
+  companion object {
+    /** The foreground types it runs with; -1 = not running. */
+    @Volatile var types: Int = -1
+
+    fun wantedTypes(c: Context): Int {
+      if (Build.VERSION.SDK_INT < 30) return 0
+      var t = ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+      if (c.checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+        t = t or ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+      }
+      return t
+    }
+  }
+
+  private var wake: PowerManager.WakeLock? = null
+
+  override fun onBind(intent: Intent?): IBinder? = null
+
+  override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+    val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+    if (Build.VERSION.SDK_INT >= 26) {
+      nm.createNotificationChannel(NotificationChannel("call", "Calls", NotificationManager.IMPORTANCE_LOW))
+    }
+    val open = PendingIntent.getActivity(
+      this, 2, packageManager.getLaunchIntentForPackage(packageName),
+      PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+    )
+    val b = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, "call") else Notification.Builder(this)
+    val n = b.setContentTitle("Aquamarine")
+      .setContentText(intent?.getStringExtra("text") ?: "Call in progress — tap to return")
+      .setSmallIcon(R.drawable.ic_stat_aquamarine)
+      .setOngoing(true)
+      .setOnlyAlertOnce(true)
+      .setContentIntent(open)
+      .build()
+    val want = wantedTypes(this)
+    try {
+      if (Build.VERSION.SDK_INT >= 30) startForeground(7792, n, want) else startForeground(7792, n)
+      types = want
+    } catch (_: Exception) {
+      // Already in the foreground: keep going with the types it has.
+      if (types == -1) {
+        stopSelf()
+        return START_NOT_STICKY
+      }
+    }
+    if (wake == null) {
+      wake = (getSystemService(Context.POWER_SERVICE) as PowerManager)
+        .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "aquamarine:call").also { it.acquire(12 * 60 * 60 * 1000L) }
+    }
+    return START_NOT_STICKY
+  }
+
+  override fun onTaskRemoved(rootIntent: Intent?) {
+    stopSelf()
+  }
+
+  override fun onDestroy() {
+    types = -1
+    wake?.let { if (it.isHeld) it.release() }
+    wake = null
+    super.onDestroy()
+  }
+}
+
+/** After a reboot or an update Android does not restart the messenger's
+ *  connection, and the app can't connect without being opened: say so once,
+ *  if background messages are on. */
+class AquaBootReceiver : BroadcastReceiver() {
+  override fun onReceive(context: Context, intent: Intent?) {
+    val action = intent?.action ?: return
+    if (action != Intent.ACTION_BOOT_COMPLETED && action != Intent.ACTION_MY_PACKAGE_REPLACED) return
+    if (!AquaPrefs.sync(context)) return
+    try {
+      val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+      if (Build.VERSION.SDK_INT >= 26) {
+        nm.createNotificationChannel(NotificationChannel("resume", "Reconnect reminder", NotificationManager.IMPORTANCE_DEFAULT))
+      }
+      val open = PendingIntent.getActivity(
+        context, 3, context.packageManager.getLaunchIntentForPackage(context.packageName),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+      )
+      val b = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(context, "resume") else Notification.Builder(context)
+      nm.notify(7793, b.setContentTitle("Aquamarine")
+        .setContentText(AquaPrefs.reminder(context))
+        .setSmallIcon(R.drawable.ic_stat_aquamarine)
+        .setAutoCancel(true)
+        .setContentIntent(open)
+        .build())
+    } catch (_: Exception) {
+      // No notification permission: nothing to say.
+    }
   }
 }
 

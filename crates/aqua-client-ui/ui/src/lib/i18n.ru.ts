@@ -469,6 +469,8 @@ export const RU: Record<string, string> = {
   "Don't want this window after updates? Turn it off in Settings → Updates.": "Не нужно это окно после обновлений? Отключите его в Настройках → Обновления.",
   "Outgoing call": "Исходящий звонок",
   "Incoming call": "Входящий звонок",
+  "Call in progress — tap to return": "Идёт звонок — нажмите, чтобы вернуться",
+  "Open the app to receive new messages again": "Откройте приложение, чтобы снова получать сообщения",
   "Missed call": "Пропущенный звонок",
   "Declined call": "Отклонённый звонок",
   "Cancelled call": "Отменённый звонок",
@@ -2926,7 +2928,7 @@ export const RU: Record<string, string> = {
   "Could not load the story": "Не удалось загрузить историю",
   "Lightweight mode": "Лёгкий режим",
   "Lighter effects": "Облегчённые эффекты",
-  "Auto (weak devices)": "Авто (слабые устройства)",
+  "Auto (phones and weak devices)": "Авто (телефоны и слабые устройства)",
   "No glass blur, no moving glow, flat shadows, fewer looping animations — smoother on weaker phones and computers. Looks almost the same.": "Без размытия стекла, плавающего свечения и мягких теней, меньше повторяющихся анимаций — плавнее на слабых телефонах и компьютерах. Выглядит почти так же.",
   "Sensitive content": "Деликатный контент",
   "Blur explicit photos and stickers": "Размывать откровенные фото и стикеры",
@@ -3263,4 +3265,5 @@ export const RU: Record<string, string> = {
   "updates are off in this build: it has no release signing key": "в этой сборке обновления выключены: в ней нет ключа подписи выпусков",
   "this release isn't signed by the Aquamarine release key — the update wasn't installed": "выпуск не подписан ключом выпусков Aquamarine — обновление не установлено",
   "this release has no signed checksum yet (still uploading, or not signed by the Aquamarine release key) — the update wasn't installed": "у выпуска ещё нет подписанной контрольной суммы (загружается или не подписан ключом выпусков Aquamarine) — обновление не установлено",
+  "this update is no longer on offer — check for updates again": "это обновление больше не предлагается — проверьте обновления ещё раз",
 };
