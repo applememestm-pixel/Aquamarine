@@ -46,7 +46,6 @@
   /** UnifiedPush (push.rs): {on, endpoint, distributor, distributors}. */
   type PushState = { on?: boolean; endpoint?: string; distributor?: string; distributors?: string[] };
   let push = $state<PushState>({});
-  if (IS_ANDROID) void invoke<PushState>("push_unifiedpush_state").then((v) => (push = v)).catch(() => {});
   async function togglePush() {
     try {
       push = await invoke<PushState>("push_unifiedpush_set", { on: !push.on, text: tr("New message") });
@@ -497,6 +496,8 @@
   }
   $effect(() => { if ($settingsOpen && section === "devices") void loadDevices(); });
   const invoke = async <T,>(cmd: string, args?: Record<string, unknown>): Promise<T> => (await import("@tauri-apps/api/core")).invoke<T>(cmd, args);
+  // After `invoke` exists (it is a const: earlier, opening Settings threw).
+  if (IS_ANDROID) void invoke<PushState>("push_unifiedpush_state").then((v) => (push = v)).catch(() => {});
   // ---- Data and storage (Telegram's "Download path" + "Local storage") ----
   type StConf = { mode: "default" | "temp" | "custom"; custom: string; total_mb: number; cache_mb: number; max_days: number };
   type StInfo = { conf: StConf; downloads: string; default_dir: string; temp_dir: string };
