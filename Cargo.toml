@@ -49,7 +49,7 @@ serde       = { version = "1", features = ["derive"] }
 serde_bytes = "0.11"
 serde_json  = "1"
 bincode     = "1.3"
-base64      = "0.22"
+base64      = "0.23"
 
 # --- Errors ------------------------------------------------------------------
 thiserror = "2"
