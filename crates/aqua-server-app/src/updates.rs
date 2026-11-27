@@ -229,18 +229,23 @@ async fn find_api(c: &reqwest::Client) -> Result<Option<Found>, String> {
 
 /// The newest release in a list (the API's, or the feed's — whose releases
 /// also carry `sums`, the text of SHA256SUMS.txt) if it's newer than this app.
-async fn pick(c: &reqwest::Client, list: &serde_json::Value) -> Result<Option<Found>, String> {
-    let cur = env!("CARGO_PKG_VERSION");
-    let best = list
-        .as_array()
+/// The highest release of the list this channel may install. Pre-release
+/// or not is told by the version (signed), not by the list's flag.
+fn best(list: &serde_json::Value, tester: bool) -> Option<(String, &serde_json::Value)> {
+    list.as_array()
         .into_iter()
         .flatten()
         .filter(|r| !r["draft"].as_bool().unwrap_or(false))
-        .filter(|r| tester() || !r["prerelease"].as_bool().unwrap_or(false))
+        .filter(|r| tester || !r["prerelease"].as_bool().unwrap_or(false))
         .filter_map(|r| Some((r["tag_name"].as_str()?.strip_prefix('v')?.to_string(), r)))
         .filter(|(v, _)| v.chars().next().is_some_and(|c| c.is_ascii_digit()))
-        .reduce(|a, b| if newer(&b.0, &a.0) { b } else { a });
-    let Some((version, rel)) = best else { return Ok(None) };
+        .filter(|(v, _)| aqua_server::release::channel_allows(v, tester))
+        .reduce(|a, b| if newer(&b.0, &a.0) { b } else { a })
+}
+
+async fn pick(c: &reqwest::Client, list: &serde_json::Value) -> Result<Option<Found>, String> {
+    let cur = env!("CARGO_PKG_VERSION");
+    let Some((version, rel)) = best(list, tester()) else { return Ok(None) };
     if !newer(&version, cur) {
         return Ok(None);
     }
@@ -524,6 +529,13 @@ pub fn spawn(app: AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::newer;
+
+    #[test]
+    fn a_pre_release_marked_stable_is_not_for_everyone() {
+        let list = serde_json::json!([{ "tag_name": "v9.9.0-1", "prerelease": false }, { "tag_name": "v9.8.1", "prerelease": false }]);
+        assert_eq!(super::best(&list, false).map(|b| b.0).as_deref(), Some("9.8.1"));
+        assert_eq!(super::best(&list, true).map(|b| b.0).as_deref(), Some("9.9.0-1"));
+    }
 
     #[test]
     fn numbering() {

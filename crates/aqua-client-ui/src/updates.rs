@@ -141,7 +141,7 @@ pub async fn update_check(channel: String) -> Result<UpdateInfo, String> {
         return Err(aqua_core::release::NO_KEY.into());
     }
     let mut info = find_release(&channel).await?;
-    let next = offer(&mut info, env!("CARGO_PKG_VERSION"));
+    let next = offer(&mut info, env!("CARGO_PKG_VERSION"), channel != "stable");
     *lock(&OFFERED) = next;
     Ok(info)
 }
@@ -170,9 +170,11 @@ fn lock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 /// What may be installed over build `current`: a file with a signed
-/// checksum, of a newer release. Anything else loses its checksum.
-fn offer(info: &mut UpdateInfo, current: &str) -> Option<UpdateAsset> {
-    let up = info.version.as_deref().is_some_and(|v| newer(v, current));
+/// checksum, of a newer release this channel takes (pre-releases: testers
+/// only — told by the signed version, not the feed's `stable` key).
+/// Anything else loses its checksum.
+fn offer(info: &mut UpdateInfo, current: &str, tester: bool) -> Option<UpdateAsset> {
+    let up = info.version.as_deref().is_some_and(|v| newer(v, current) && aqua_core::release::channel_allows(v, tester));
     let asset = info.asset.as_mut()?;
     if !up {
         asset.sha256 = None;
@@ -655,7 +657,7 @@ mod tests {
             html_url: String::new(),
             asset: Some(UpdateAsset { name: "Aquamarine.apk".into(), url: "u".into(), size: 1, sha256: sha.map(Into::into) }),
         };
-        let o = offer(&mut info("1.2.1", Some("good")), "1.2.0").unwrap();
+        let o = offer(&mut info("1.2.1", Some("good")), "1.2.0", false).unwrap();
         let mut forged = o.clone();
         forged.sha256 = Some("evil".into());
         assert_eq!(offered(&forged, Some(&o)).unwrap().sha256.as_deref(), Some("good"));
@@ -664,10 +666,14 @@ mod tests {
         assert!(offered(&o, None).is_none(), "nothing was offered");
         for old in ["1.1.9", "1.2.0"] {
             let mut i = info(old, Some("good"));
-            assert!(offer(&mut i, "1.2.0").is_none(), "{old} over 1.2.0");
+            assert!(offer(&mut i, "1.2.0", true).is_none(), "{old} over 1.2.0");
             assert!(i.asset.unwrap().sha256.is_none());
         }
-        assert!(offer(&mut info("1.2.1", None), "1.2.0").is_none(), "unsigned");
+        assert!(offer(&mut info("1.2.1", None), "1.2.0", false).is_none(), "unsigned");
+        // A pre-release handed to the stable channel (the feed's `stable` key
+        // is the feed's word): not installed; testers take it.
+        assert!(offer(&mut info("1.2.1-3", Some("good")), "1.2.0", false).is_none(), "pre-release on stable");
+        assert!(offer(&mut info("1.2.1-3", Some("good")), "1.2.0", true).is_some(), "pre-release for a tester");
     }
 
     #[test]

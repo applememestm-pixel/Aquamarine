@@ -141,17 +141,22 @@ struct Found {
     proof: Option<(String, String)>,
 }
 
-async fn pick(c: &reqwest::Client, list: &serde_json::Value, tester: bool) -> Option<Found> {
-    let best = list
-        .as_array()
+/// The highest release of the list this channel may install. Pre-release
+/// or not is told by the version (signed), not by the list's flag.
+fn best(list: &serde_json::Value, tester: bool) -> Option<(String, &serde_json::Value)> {
+    list.as_array()
         .into_iter()
         .flatten()
         .filter(|r| !r["draft"].as_bool().unwrap_or(false))
         .filter(|r| tester || !r["prerelease"].as_bool().unwrap_or(false))
         .filter_map(|r| Some((r["tag_name"].as_str()?.strip_prefix('v')?.to_string(), r)))
         .filter(|(v, _)| v.chars().next().is_some_and(|c| c.is_ascii_digit()))
-        .reduce(|a, b| if newer(&b.0, &a.0) { b } else { a });
-    let (version, rel) = best?;
+        .filter(|(v, _)| aqua_core::release::channel_allows(v, tester))
+        .reduce(|a, b| if newer(&b.0, &a.0) { b } else { a })
+}
+
+async fn pick(c: &reqwest::Client, list: &serde_json::Value, tester: bool) -> Option<Found> {
+    let (version, rel) = best(list, tester)?;
     if !newer(&version, VERSION) {
         return Some(Found { version: String::new(), notes_url: String::new(), asset: None, proof: None });
     }
@@ -551,6 +556,14 @@ mod tests {
 
     /// A binary in the data folder runs only while a signed release list
     /// still names exactly it and its version.
+    #[test]
+    fn a_pre_release_marked_stable_is_not_for_everyone() {
+        // The feed says "not a pre-release"; its number says it is.
+        let list = serde_json::json!([{ "tag_name": "v9.9.0-1", "prerelease": false }, { "tag_name": "v9.8.1", "prerelease": false }]);
+        assert_eq!(super::best(&list, false).map(|b| b.0).as_deref(), Some("9.8.1"));
+        assert_eq!(super::best(&list, true).map(|b| b.0).as_deref(), Some("9.9.0-1"));
+    }
+
     #[test]
     fn a_staged_binary_needs_its_signed_list() {
         let Some(name) = wanted() else { return };

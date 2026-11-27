@@ -69,6 +69,16 @@ pub fn sums_trusted_for(sums: &str, sig_hex: Option<&str>, version: &str) -> boo
     sums_trusted(sums, sig_hex) && sums_name_version(sums, version)
 }
 
+/// May a build on this channel install release `version`? Pre-releases
+/// ("X.Y.Z-N") only for testers (owner). Decided from the version — which
+/// the signed sums name (`sums_trusted_for`) — never from the feed's own
+/// `prerelease` flag or `stable` key: whoever answers instead of the feed
+/// (the site's domain, a mirror) set those, and handed a signed pre-release
+/// to everyone (review of 1.21.0-25).
+pub fn channel_allows(version: &str, tester: bool) -> bool {
+    tester || !version.contains('-')
+}
+
 /// Release downloads come only from this repository's release pages.
 pub const DOWNLOAD_PREFIX: &str = "https://github.com/applememestm-pixel/Aquamarine/releases/download/";
 
@@ -90,6 +100,13 @@ mod tests {
         assert!(!sums_trusted_with(Some(&pk), "bbbb  app.exe\n", Some(&sig)), "changed text");
         let other = hex::encode(SignSecret::generate().sign(sums.as_bytes()));
         assert!(!sums_trusted_with(Some(&pk), sums, Some(&other)), "another key");
+    }
+
+    #[test]
+    fn pre_releases_only_for_testers() {
+        assert!(channel_allows("1.21.1", false));
+        assert!(!channel_allows("1.21.0-25", false));
+        assert!(channel_allows("1.21.0-25", true));
     }
 
     /// The line release.yml writes: `printf '%s' "$version" > VERSION`.
