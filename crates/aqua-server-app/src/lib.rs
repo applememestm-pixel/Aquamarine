@@ -661,7 +661,7 @@ pub fn run() {
                 }
             }
         })
-        .invoke_handler(tauri::generate_handler![status, start, stop, set_port, set_dir, pick_dir, set_autostart, set_tray, open_guide, admin, update_status, set_tester, update_now, open_notes, choose_mode, remote::remote_list, remote::remote_save, remote::remote_delete, remote::remote_connect, remote::remote_disconnect])
+        .invoke_handler(tauri::generate_handler![status, start, stop, set_port, set_dir, pick_dir, set_autostart, set_tray, open_guide, admin, update_status, set_tester, update_now, open_notes, choose_mode, remote::remote_list, remote::remote_save, remote::remote_delete, remote::remote_connect, remote::remote_disconnect, remote::remote_trust])
         .build(tauri::generate_context!());
     match res {
         // Quitting keeps the server's files (aqua_server::blobstore: they go

@@ -217,3 +217,7 @@ jobs:
       - name: cargo check (Aquamarine Server)
         working-directory: crates/aqua-server-app
         run: cargo check
+      # Its own tests (updates.rs, remote.rs): they weren't run before.
+      - name: cargo test (Aquamarine Server)
+        working-directory: crates/aqua-server-app
+        run: cargo test --bins --lib
