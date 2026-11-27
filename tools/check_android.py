@@ -6,6 +6,7 @@
 - Arguments read with parseArgs need @InvokeArg for the same reason.
 - Every service / receiver in the Kotlin sources must be declared both by the
   release workflow and by android/patch-project.sh / .ps1 (local and CI builds).
+- Every build excludes the whole app from Android's backup (android/backup/).
 """
 import re
 import sys
@@ -59,6 +60,35 @@ for manifest in manifests:
     for name in components:
         if f'android:name=".{name}"' not in text:
             errors.append(f"{manifest.relative_to(ROOT)}: {name} is not declared in the Android manifest")
+
+# Android's backup would carry keys and the vault off the phone: every build
+# turns it off and ships the rules that exclude everything.
+DOMAINS = [
+    "root", "file", "database", "sharedpref", "external",
+    "device_root", "device_file", "device_database", "device_sharedpref",
+]
+BACKUP_ATTRS = [
+    'android:allowBackup="false"',
+    'android:fullBackupContent="@xml/backup_rules"',
+    'android:dataExtractionRules="@xml/data_extraction_rules"',
+]
+# (file, how many manifests it patches)
+patchers = [(m, 2 if m.name == "release.yml" else 1) for m in manifests]
+patchers.append((ROOT / ".github" / "workflows" / "server-app-android.yml", 1))
+for path, count in patchers:
+    # (the shell patcher writes "\@" for Perl)
+    text = path.read_text(encoding="utf-8").replace("\\@", "@")
+    for attr in BACKUP_ATTRS:
+        if text.count(f"<application {BACKUP_ATTRS[0]}") < count or attr not in text:
+            errors.append(f"{path.relative_to(ROOT)}: the manifest isn't given {attr}")
+            break
+for name, sections in (("backup_rules.xml", 1), ("data_extraction_rules.xml", 2)):
+    text = (ROOT / "android" / "backup" / name).read_text(encoding="utf-8")
+    if "<include" in text:
+        errors.append(f"android/backup/{name}: nothing may be included in a backup")
+    for domain in DOMAINS:
+        if text.count(f'<exclude domain="{domain}" path="." />') != sections:
+            errors.append(f"android/backup/{name}: domain {domain} must be excluded in every section")
 
 if errors:
     print("\n".join(errors))

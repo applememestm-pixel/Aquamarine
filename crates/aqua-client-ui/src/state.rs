@@ -954,6 +954,7 @@ impl AppState {
         let master_key = load_or_create_master_key(&data_dir)
             .context("loading master key")?;
         let vault = Vault::open(&vault_path, master_key).context("opening vault")?;
+        crate::vault_key::keep_recovery(&data_dir, &vault);
 
         // Identity: load or create.
         let identity = match vault.load_identity()? {
@@ -1381,7 +1382,7 @@ fn clear_account_file(dir: &std::path::Path) {
 // places.
 
 // Android has no `keyring` backend: the key is wrapped by the Android
-// Keystore instead (`android_master_key`). iOS uses keyring's Keychain
+// Keystore instead (vault_key.rs). iOS uses keyring's Keychain
 // backend like the desktop (before 1.21.0-23 a plain `master.key` there;
 // the desktop path below moves such a file into the Keychain and deletes it).
 #[cfg(any(target_os = "android", aqua_mobilecheck))]
@@ -1399,73 +1400,9 @@ mod keyring {
 const KEYRING_SERVICE: &str = "app.aquamarine.desktop";
 const KEYRING_USER:    &str = "vault-master-key";
 
-/// Wrapping a key with the Keystore is off until it has been tried on a real
-/// phone: the release build never ran it (the plugin was cut out of it up to
-/// 1.21.0-23), and Android's own backup would carry `master.key.ks` to a new
-/// phone without the key that opens it — the app could never start again.
-/// Turning it on needs that backup excluded first.
-#[cfg(target_os = "android")]
-const KEYSTORE_WRAP: bool = false;
-
-/// Android: the vault master key wrapped by a Keystore key
-/// (`master.key.ks`), never as plain bytes (AQUA-SEC-013: before 1.21.0-23
-/// it was a plain `master.key` in the app's folder).
-/// * `master.key.ks` there → it must unwrap; if the Keystore can't, stop
-///   with an error rather than make a new key (that would lose the vault).
-/// * only the old `master.key` → wrap it, check the round trip, then delete
-///   the plain file; any failure keeps the file (it still works).
-/// * neither → a new key, wrapped; the plain file only if wrapping fails.
-#[cfg(target_os = "android")]
-fn android_master_key(dir: &std::path::Path) -> Result<MasterKey> {
-    use aqua_client_core::MASTER_KEY_LEN;
-    use crate::relay_host::android::{ks_unwrap, ks_wrap};
-    let ks = dir.join("master.key.ks");
-    let plain = dir.join("master.key");
-    if ks.exists() {
-        let blob = std::fs::read_to_string(&ks)?;
-        let hex_key = ks_unwrap(blob.trim()).map_err(|e| anyhow!("the Android keystore didn't open this account's vault key ({e}) — restart the app"))?;
-        let arr = decode_key(&hex_key).ok_or_else(|| anyhow!("the keystore gave a malformed vault key"))?;
-        if plain.exists() {
-            let _ = std::fs::remove_file(&plain);
-        }
-        return Ok(MasterKey::from_bytes(arr));
-    }
-    let wrap_and_check = |arr: &[u8; MASTER_KEY_LEN]| -> bool {
-        let hex_key = hex::encode(arr);
-        match ks_wrap(&hex_key) {
-            Ok(blob) => {
-                let back = ks_unwrap(&blob).ok().and_then(|h| decode_key(&h));
-                if back.as_ref() == Some(arr) && crate::fsx::write_atomic(&ks, blob.as_bytes()).is_ok() {
-                    return true;
-                }
-                tracing::warn!("keystore round trip failed; keeping the plain key file");
-                false
-            }
-            Err(e) => { tracing::warn!(%e, "keystore unavailable; keeping the plain key file"); false }
-        }
-    };
-    if plain.exists() {
-        let arr: [u8; MASTER_KEY_LEN] = std::fs::read(&plain)?.try_into().map_err(|_| anyhow!("master.key has unexpected length"))?;
-        if KEYSTORE_WRAP && wrap_and_check(&arr) {
-            if let Err(e) = std::fs::remove_file(&plain) {
-                tracing::warn!(?e, "vault key wrapped by the keystore, but the plain file couldn't be removed");
-            } else {
-                tracing::info!("vault master key moved into the Android keystore");
-            }
-        }
-        return Ok(MasterKey::from_bytes(arr));
-    }
-    std::fs::create_dir_all(dir)?;
-    let key = MasterKey::generate();
-    if !(KEYSTORE_WRAP && wrap_and_check(&key.0)) {
-        std::fs::write(&plain, key.0)?;
-    }
-    Ok(key)
-}
-
 fn load_or_create_master_key(dir: &std::path::Path) -> Result<MasterKey> {
     #[cfg(target_os = "android")]
-    let key = android_master_key(dir);
+    let key = crate::vault_key::resolve_once(dir, &|k| key_opens(dir, k)).map(MasterKey::from_bytes);
     #[cfg(not(target_os = "android"))]
     let key = keyring_master_key(dir);
     key
@@ -1581,7 +1518,7 @@ fn keyring_master_key(dir: &std::path::Path) -> Result<MasterKey> {
 
 /// Does `key` open the vault in `dir` (its identity decrypts)? A vault with
 /// no identity yet opens with any key.
-fn key_opens(dir: &std::path::Path, key: &[u8; aqua_client_core::MASTER_KEY_LEN]) -> bool {
+pub(crate) fn key_opens(dir: &std::path::Path, key: &[u8; aqua_client_core::MASTER_KEY_LEN]) -> bool {
     let p = dir.join("vault.sqlite");
     if !p.exists() {
         return true;

@@ -104,8 +104,8 @@ async fn two_relays_act_as_one() {
     register(&http, &ub, &idc, "carol").await;
 
     // Replication: each relay now knows the others' accounts.
-    fed::sync_once(&sa, &mut Default::default()).await;
-    fed::sync_once(&sb, &mut Default::default()).await;
+    fed::sync_once(&sa).await;
+    fed::sync_once(&sb).await;
     assert_eq!(sa.directory.identity_for("bob"), Some(*idb.public().dh_pub.as_bytes()));
     assert_eq!(sb.directory.identity_for("alice"), Some(*ida.public().dh_pub.as_bytes()));
 
@@ -159,7 +159,7 @@ async fn two_relays_act_as_one() {
     // Backups replicate too.
     turn_on_2fa(&ua, &ida).await;
     assert!(http.put(format!("{ua}/v1/backup")).bearer_auth(&ta).body(b"AQBK1 sealed".to_vec()).send().await.unwrap().status().is_success());
-    fed::sync_once(&sb, &mut Default::default()).await;
+    fed::sync_once(&sb).await;
     assert_eq!(sb.directory.get_backup("alice").unwrap(), b"AQBK1 sealed");
 }
 
@@ -310,7 +310,7 @@ async fn solo_relay_shares_only_names() {
     // @bob in the network; the solo relay learns only the name.
     let (st, bob_tok) = signup(&http, &ua, "bob", "").await;
     assert_eq!(st, 204);
-    fed::sync_once(&ss, &mut Default::default()).await;
+    fed::sync_once(&ss).await;
     assert_eq!(signup(&http, &us, "bob", "").await.0, 409, "taken in the network");
     assert!(ss.directory.identity_for("bob").is_none(), "no account copied to the solo relay");
     assert_eq!(search(us.clone(), "bob").await, 0);
@@ -319,7 +319,7 @@ async fn solo_relay_shares_only_names() {
     assert_eq!(signup(&http, &us, "zed", "").await.0, 204);
     let reg = fed::registry(&ss).unwrap();
     fed::names_hello(&reg).await;
-    fed::sync_once(&sa, &mut Default::default()).await;
+    fed::sync_once(&sa).await;
     assert_eq!(signup(&http, &ua, "zed", "").await.0, 409, "taken on the solo relay");
     assert!(sa.directory.identity_for("zed").is_none());
     assert_eq!(search(ua.clone(), "zed").await, 0);
@@ -356,7 +356,7 @@ async fn solo_relay_shares_only_names() {
     assert_eq!(me["username"], "bob");
     // The network sees it as its own @bob, not a clash.
     fed::names_hello(&fed::registry(&ss).unwrap()).await;
-    fed::sync_once(&sa, &mut Default::default()).await;
+    fed::sync_once(&sa).await;
     assert!(sa.directory.identity_for("bob").is_some());
     assert_eq!(sa.directory.username_by_uid(&sa.directory.uid_of("bob").unwrap()).as_deref(), Some("bob"));
 
@@ -401,7 +401,7 @@ async fn a_new_relay_knows_everyone_after_its_first_sync() {
     let sb = AppState::isolated(tmp.path().join("b"), Some(FedConfig { secret: SECRET.into(), peers: vec![ua.clone()], public_url: ub.clone(), mode: "network".into(), ..Default::default() }));
     { let s = sb.clone(); tokio::spawn(async move { axum::serve(lb, app(s)).await.unwrap() }); }
     tokio::time::sleep(Duration::from_millis(100)).await;
-    fed::sync_once(&sb, &mut Default::default()).await;
+    fed::sync_once(&sb).await;
     for n in 0..30 {
         assert!(sb.directory.identity_for(&format!("early{n}")).is_some(), "early{n} reached B");
     }
@@ -438,7 +438,8 @@ async fn equal_timestamps_across_pages_are_not_skipped() {
     register(&http, &ua, &id, "tmpl").await;
     let tmpl = sa.directory.fed_users_since(0).into_iter().find(|u| u.username == "tmpl").unwrap();
     const N: usize = 1200;
-    let t = 1_900_000_000_000i64;
+    // One past moment (A8: a time in the future isn't taken from peers).
+    let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64 - 60_000;
     for i in 0..N {
         let mut u = tmpl.clone();
         u.username = format!("same{i:04}");
@@ -449,13 +450,13 @@ async fn equal_timestamps_across_pages_are_not_skipped() {
     }
     let on_b = |sb: &AppState| (0..N).filter(|i| sb.directory.identity_for(&format!("same{i:04}")).is_some()).count();
 
-    let mut cursors = Default::default();
-    fed::sync_once(&sb, &mut cursors).await;
+    fed::sync_once(&sb).await;
     assert_eq!(on_b(&sb), N, "every account with the shared timestamp arrived");
-    fed::sync_once(&sb, &mut cursors).await;
+    fed::sync_once(&sb).await;
     assert_eq!(on_b(&sb), N, "a second sync changes nothing");
-    fed::sync_once(&sb, &mut Default::default()).await;
-    assert_eq!(on_b(&sb), N, "a fresh start (restart) reads them again without loss");
+    fed::resync(&sb, None, None);
+    fed::sync_once(&sb).await;
+    assert_eq!(on_b(&sb), N, "read again from the start (the admin's resync): no loss");
 }
 
 /// AQUA-SEC-009 end to end: after A and B say hello they know each other's
@@ -485,11 +486,11 @@ async fn node_keys_replace_the_shared_secret_once_known() {
     // Hellos both ways: each pins the other.
     fed::current(&sa).unwrap().hello_all().await;
     for _ in 0..50 {
-        if fed::current(&sa).unwrap().strict() && fed::current(&sb).unwrap().strict() { break }
+        if fed::current(&sa).unwrap().enforced() && fed::current(&sb).unwrap().enforced() { break }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    assert!(fed::current(&sb).unwrap().strict(), "B knows A's key");
-    assert!(fed::current(&sa).unwrap().strict(), "A knows B's key (B said hello back)");
+    assert!(fed::current(&sb).unwrap().enforced(), "B knows A's key");
+    assert!(fed::current(&sa).unwrap().enforced(), "A knows B's key (B said hello back)");
     assert!(fed::current(&sa).unwrap().fetch_bundle("keyed").await.is_some(), "A reads through v2");
 
     // Someone with only the secret (a relay of its own at another address).
@@ -529,10 +530,10 @@ async fn strict_pair() -> (AppState, AppState, String, String, tempfile::TempDir
     tokio::time::sleep(Duration::from_millis(100)).await;
     fed::current(&sa).unwrap().hello_all().await;
     for _ in 0..60 {
-        if fed::current(&sa).unwrap().strict() && fed::current(&sb).unwrap().strict() { break }
+        if fed::current(&sa).unwrap().enforced() && fed::current(&sb).unwrap().enforced() { break }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    assert!(fed::current(&sa).unwrap().strict() && fed::current(&sb).unwrap().strict());
+    assert!(fed::current(&sa).unwrap().enforced() && fed::current(&sb).unwrap().enforced());
     (sa, sb, ua, ub, tmp)
 }
 
@@ -568,13 +569,13 @@ async fn admission_impersonation_and_rejoining() {
     let b = fed::current(&sb).unwrap();
     assert!(b.cfg.pending_nodes.iter().any(|p| p.url == ux), "X waits for the admin");
     assert!(!b.cfg.peers.contains(&ux), "X isn't a peer");
-    assert!(b.strict(), "B stays strict");
+    assert!(b.enforced(), "B stays strict");
     assert!(fed::current(&sx).unwrap().fetch_bundle("victim").await.is_none(), "X reads nothing");
     // X can't change the victim's account on B: B never pulls from it, and
     // its pokes (secret only) are refused.
     let r = http.post(format!("{ub}/v1/fed/poke")).body("{}").send().await.unwrap();
     assert_eq!(r.status().as_u16(), 401);
-    fed::sync_once(&sb, &mut Default::default()).await;
+    fed::sync_once(&sb).await;
     assert_eq!(sb.directory.identity_for("victim"), victim_key, "the account is unchanged");
 
     // 2) An impostor claiming A's address, with the secret and its own key:
@@ -605,8 +606,11 @@ async fn admission_impersonation_and_rejoining() {
     let mut c = fed::current(&sn).unwrap().cfg.clone();
     c.peers.push(ua.clone());
     if let Ok(mut g) = sn.fed.write() { *g = fed::Fed::new(c); }
-    fed::current(&sn).unwrap().hello_all().await;
-    for _ in 0..40 { if fed::current(&sa).unwrap().pin_for(&un).is_some() { break } tokio::time::sleep(Duration::from_millis(50)).await; }
+    for _ in 0..20 {
+        fed::current(&sn).unwrap().hello_all().await;
+        if fed::current(&sa).unwrap().pin_for(&un).is_some() { break }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
     assert!(fed::current(&sa).unwrap().pin_for(&un).is_some(), "A admits N on B's vouch");
 
     // 4) Re-joining: revoke N on B; its hellos are ignored; with a new key and
@@ -690,7 +694,7 @@ async fn tampered_sync_answers_are_refused() {
     // Keys known both ways (hellos go through the proxy untouched).
     fed::current(&sa).unwrap().hello_all().await;
     for _ in 0..60 {
-        if fed::current(&sa).unwrap().strict() && fed::current(&sb).unwrap().strict() { break }
+        if fed::current(&sa).unwrap().enforced() && fed::current(&sb).unwrap().enforced() { break }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     assert!(fed::current(&sb).unwrap().pin_for(&up).is_some(), "B knows A's key");
@@ -700,13 +704,13 @@ async fn tampered_sync_answers_are_refused() {
 
     // The proxy swaps the victim's key in the answer: B applies nothing.
     TAMPER.store(true, Ordering::SeqCst);
-    fed::sync_once(&sb, &mut Default::default()).await;
+    fed::sync_once(&sb).await;
     assert_ne!(sb.directory.identity_for("mitmvictim"), Some(*evil.public().dh_pub.as_bytes()), "a tampered answer must not change the account");
     assert!(sb.directory.identity_for("mitmvictim").is_none(), "the tampered page was dropped as a whole");
 
     // Untouched: the real account arrives.
     TAMPER.store(false, Ordering::SeqCst);
-    fed::sync_once(&sb, &mut Default::default()).await;
+    fed::sync_once(&sb).await;
     assert_eq!(sb.directory.identity_for("mitmvictim"), Some(*id.public().dh_pub.as_bytes()));
 }
 
@@ -743,7 +747,7 @@ async fn sealed_accounts_change_only_with_a_device_seal() {
     let bad = hex::encode(other.sign.sign(msg.as_bytes()));
     assert!(aqua_client_core::Transport::me_call_at(&ua, &id, "PUT", "seal", Some(serde_json::json!({ "sig": bad }))).await.is_err());
 
-    fed::sync_once(&sb, &mut Default::default()).await;
+    fed::sync_once(&sb).await;
     let row = |s: &AppState, n: &str| s.directory.fed_users_since(0).into_iter().find(|u| u.username == n).unwrap();
     let on_b = row(&sb, "sealed");
     assert!(!on_b.seal.is_empty(), "the seal travels with the account");
@@ -787,4 +791,608 @@ async fn sealed_accounts_change_only_with_a_device_seal() {
     u.updated_at += 10;
     assert!(!sb.directory.fed_apply_user(&u).refused_security);
     assert_eq!(row(&sb, "unsealed").password, "changed");
+}
+
+/// A relay behind a router (no address: `tunnel:<node>`) and a public one.
+/// The public relay can reach it only over the reverse link the private one
+/// keeps open. Both ways must work once both keys are pinned.
+async fn tunnel_pair(tmp: &tempfile::TempDir) -> (AppState, AppState, String, String, String) {
+    let la = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let ua = format!("http://{}", la.local_addr().unwrap());
+    let cfg_a = FedConfig { secret: SECRET.into(), peers: vec![], public_url: ua.clone(), mode: "network".into(), ..Default::default() };
+    let sa = AppState::isolated(tmp.path().join("ta"), Some(cfg_a));
+    // B has no address; its peers know it as `tunnel:<node>`. Its key can't
+    // be checked at an address: it joins with an invitation token.
+    let token = fed::new_admit_token(&sa).unwrap();
+    let cfg_b = FedConfig { secret: SECRET.into(), peers: vec![ua.clone()], public_url: String::new(), mode: "network".into(), join_token: token, ..Default::default() };
+    let sb = AppState::isolated(tmp.path().join("tb"), Some(cfg_b));
+    { let s = sa.clone(); tokio::spawn(async move { axum::serve(la, app(s)).await.unwrap() }); }
+    // B listens only for its own users (in a test, to register one); the
+    // network doesn't know this address.
+    let lb = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let ub = format!("http://{}", lb.local_addr().unwrap());
+    { let s = sb.clone(); tokio::spawn(async move { axum::serve(lb, app(s)).await.unwrap() }); }
+    let tb_id = fed::my_id(&fed::current(&sb).unwrap().cfg);
+    assert!(tb_id.starts_with("tunnel:"), "{tb_id}");
+    aqua_server::fedtunnel::spawn(sb.clone());
+    (sa, sb, ua, tb_id, ub)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tunnel_peer_with_pinned_key_syncs_both_ways() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (sa, sb, ua, tb, ub) = tunnel_pair(&tmp).await;
+    // B says hello (it can reach A): A pins B under `tunnel:<node>`, B pins A.
+    for _ in 0..100 {
+        fed::current(&sb).unwrap().hello_all().await;
+        fed::absorb_vouches(&sb);
+        let a_ok = fed::current(&sa).is_some_and(|f| f.pin_for(&tb).is_some() && f.cfg.peers.contains(&tb));
+        let b_ok = fed::current(&sb).is_some_and(|f| f.pin_for(&ua).is_some());
+        if a_ok && b_ok { break }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(fed::current(&sa).unwrap().pin_for(&tb).is_some(), "A pinned B's key");
+    assert!(fed::current(&sb).unwrap().pin_for(&ua).is_some(), "B pinned A's key");
+    let http = reqwest::Client::builder().user_agent(concat!("aqua-client-core/", env!("CARGO_PKG_VERSION"))).build().unwrap();
+    // An account on each side.
+    register(&http, &ua, &IdentityKeyPair::generate(), "pubside").await;
+    register(&http, &ub, &IdentityKeyPair::generate(), "behind").await;
+    // B → A: plain requests.
+    fed::sync_once(&sb).await;
+    assert!(sb.directory.identity_for("pubside").is_some(), "B pulled A's account");
+    // A → B: only over the reverse link (B polls A).
+    let mut ok = false;
+    for _ in 0..60 {
+        fed::sync_once(&sa).await;
+        if sa.directory.identity_for("behind").is_some() { ok = true; break }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    assert!(ok, "A pulled B's account over the reverse link");
+}
+
+/// Wait until A and B (`tunnel_pair`) have pinned each other.
+async fn pin_tunnel_pair(sa: &AppState, sb: &AppState, ua: &str, tb: &str) {
+    for _ in 0..100 {
+        fed::current(sb).unwrap().hello_all().await;
+        fed::absorb_vouches(sb);
+        let a_ok = fed::current(sa).is_some_and(|f| f.pin_for(tb).is_some() && f.cfg.peers.iter().any(|p| p == tb));
+        let b_ok = fed::current(sb).is_some_and(|f| f.pin_for(ua).is_some());
+        if a_ok && b_ok { return }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("the pair didn't pin each other");
+}
+
+/// Someone with only the shared secret: a signed POST to a relay.
+async fn secret_post(url: &str, path: &str, body: serde_json::Value) -> u16 {
+    let me = fed::Fed::new(FedConfig { secret: SECRET.into(), peers: vec![url.into()], public_url: "http://x.invalid".into(), mode: "network".into(), ephemeral: true, ..Default::default() }).unwrap();
+    let body = serde_json::to_vec(&body).unwrap();
+    let http = reqwest::Client::builder().user_agent(concat!("aqua-server/", env!("CARGO_PKG_VERSION"))).build().unwrap();
+    http.post(format!("{url}{path}")).header("x-aqua-fed", me.sign("POST", path, &body)).header("content-type", "application/json")
+        .timeout(Duration::from_secs(30)).body(body).send().await.unwrap().status().as_u16()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tunnel_poll_cannot_claim_another_node() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (sa, sb, ua, tb, ub) = tunnel_pair(&tmp).await;
+    pin_tunnel_pair(&sa, &sb, &ua, &tb).await;
+    // With the secret only: neither B's requests nor a reply for them.
+    let st = secret_post(&ua, "/v1/fed/tunnel", serde_json::json!({ "id": tb, "v": env!("CARGO_PKG_VERSION") })).await;
+    assert!(st == 401 || st == 403, "poll as B: {st}");
+    let st = secret_post(&ua, "/v1/fed/tunnel/reply", serde_json::json!([{ "rid": 1, "status": 200, "body": "" }])).await;
+    assert!(st == 401 || st == 403, "reply as B: {st}");
+    // A relay of the network can't drop B from A's list by naming it as its
+    // own "old address" either (only B's key may say so).
+    let before = fed::current(&sa).unwrap().cfg.peers.clone();
+    let _ = secret_post(&ua, "/v1/fed/tunnel", serde_json::json!({ "id": "tunnel:intruder", "addr": tb, "v": env!("CARGO_PKG_VERSION") })).await;
+    assert_eq!(fed::current(&sa).unwrap().cfg.peers, before);
+    // B's link still works.
+    let http = reqwest::Client::builder().user_agent(concat!("aqua-client-core/", env!("CARGO_PKG_VERSION"))).build().unwrap();
+    register(&http, &ub, &IdentityKeyPair::generate(), "stillhere").await;
+    let mut ok = false;
+    for _ in 0..60 {
+        fed::sync_once(&sa).await;
+        if sa.directory.identity_for("stillhere").is_some() { ok = true; break }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    assert!(ok);
+}
+
+/// A signed request with the secret only, not waiting for the answer.
+async fn secret_post_nowait(url: &str, path: &str, body: serde_json::Value) -> Option<u16> {
+    let me = fed::Fed::new(FedConfig { secret: SECRET.into(), peers: vec![url.into()], public_url: "http://x.invalid".into(), mode: "network".into(), ephemeral: true, ..Default::default() }).unwrap();
+    let body = serde_json::to_vec(&body).unwrap();
+    let http = reqwest::Client::builder().user_agent(concat!("aqua-server/", env!("CARGO_PKG_VERSION"))).build().unwrap();
+    http.post(format!("{url}{path}")).header("x-aqua-fed", me.sign("POST", path, &body)).header("content-type", "application/json")
+        .timeout(Duration::from_millis(1500)).body(body).send().await.ok().map(|r| r.status().as_u16())
+}
+
+/// A3: anyone with the shared secret could make up `tunnel:<anything>`,
+/// poll under it, get it on the peer list — and with one unkeyed peer on the
+/// list the relay went back to taking the secret alone. Now it's refused,
+/// and even a peer put on the list while the admin's window is open doesn't
+/// lower the requirement once the window is closed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn forged_tunnel_id_does_not_downgrade() {
+    let (_sa, sb, _ua, ub, _tmp) = strict_pair().await;
+    let before = fed::current(&sb).unwrap().cfg.peers.clone();
+    let st = secret_post_nowait(&ub, "/v1/fed/tunnel", serde_json::json!({ "id": "tunnel:forged", "v": env!("CARGO_PKG_VERSION") })).await;
+    assert_eq!(st, Some(401));
+    assert_eq!(fed::current(&sb).unwrap().cfg.peers, before);
+    assert!(fed::current(&sb).unwrap().enforced());
+    // The admin lets relays without keys in for a day (must confirm).
+    assert!(fed::set_auth(&sb, "legacy", 1, false).is_err(), "needs confirm");
+    assert!(fed::set_auth(&sb, "legacy", 30, true).is_err(), "at most 7 days");
+    fed::set_auth(&sb, "legacy", 1, true).unwrap();
+    assert!(!fed::current(&sb).unwrap().enforced());
+    let _ = secret_post_nowait(&ub, "/v1/fed/tunnel", serde_json::json!({ "id": "tunnel:forged", "v": env!("CARGO_PKG_VERSION") })).await;
+    assert!(fed::current(&sb).unwrap().cfg.peers.iter().any(|p| p == "tunnel:forged"), "taken during the window");
+    fed::set_auth(&sb, "legacy_end", 0, false).unwrap();
+    assert!(fed::current(&sb).unwrap().enforced(), "an unkeyed peer on the list doesn't lower it");
+    assert_eq!(secret_post_nowait(&ub, "/v1/fed/tunnel", serde_json::json!({ "id": "tunnel:forged" })).await, Some(401));
+}
+
+/// A3: once keys are required, the name registry is read only with a node
+/// key. A solo relay brings its key in its names hello: without an
+/// invitation token it waits for the admin; with one it's pinned as
+/// "names" — it reads names, and nothing else.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn solo_registry_requires_node_key_after_enforcement() {
+    let (sa, _sb, ua, _ub, tmp) = strict_pair().await;
+    let http = reqwest::Client::builder().user_agent(concat!("aqua-client-core/", env!("CARGO_PKG_VERSION"))).build().unwrap();
+    register(&http, &ua, &IdentityKeyPair::generate(), "netname").await;
+    async fn solo(tmp: &tempfile::TempDir, ua: &str, name: &str, token: &str) -> (AppState, String) {
+        let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let u = format!("http://{}", l.local_addr().unwrap());
+        let c = FedConfig { secret: SECRET.into(), peers: vec![ua.to_string()], public_url: u.clone(), mode: "solo".into(), join_token: token.into(), ..Default::default() };
+        let s = AppState::isolated(tmp.path().join(name), Some(c));
+        { let s = s.clone(); tokio::spawn(async move { axum::serve(l, app(s)).await.unwrap() }); }
+        (s, u)
+    }
+    // Secret only: nothing.
+    let (s1, u1) = solo(&tmp, &ua, "s1", "").await;
+    fed::sync_once(&s1).await;
+    assert!(s1.directory.names_after(0, None, 100).iter().all(|r| r.username != "netname"), "no names without a key");
+    fed::names_hello(&fed::registry(&s1).unwrap()).await;
+    let a = fed::current(&sa).unwrap();
+    assert!(a.cfg.pending_nodes.iter().any(|p| p.url == u1 && p.role == "names"), "waits for the admin");
+    assert!(!a.cfg.solo_peers.iter().any(|p| *p == u1));
+    // With an invitation token: pinned as a relay of the name registry.
+    let token = fed::new_admit_token(&sa).unwrap();
+    let (s2, u2) = solo(&tmp, &ua, "s2", &token).await;
+    fed::names_hello(&fed::registry(&s2).unwrap()).await;
+    fed::absorb_vouches(&s2);
+    let a = fed::current(&sa).unwrap();
+    assert_eq!(a.pin_for(&u2).map(|p| p.role.clone()).as_deref(), Some("names"));
+    assert!(fed::registry(&s2).unwrap().pin_for(&ua).is_some(), "the solo relay pinned A from its answer");
+    fed::sync_once(&s2).await;
+    assert!(s2.directory.names_after(0, None, 100).iter().any(|r| r.username == "netname"), "names with the key");
+    // ...and nothing but names.
+    let s2f = fed::registry(&s2).unwrap();
+    let path = "/v1/fed/users?since=0";
+    let r = http.get(format!("{ua}{path}"))
+        .header("x-aqua-fed", s2f.sign("GET", path, b""))
+        .header("x-aqua-fed2", s2f.sign2(&ua, "GET", path, b"").unwrap())
+        .header("user-agent", concat!("aqua-server/", env!("CARGO_PKG_VERSION")))
+        .send().await.unwrap();
+    assert_eq!(r.status().as_u16(), 401, "a names relay can't read accounts");
+}
+
+/// Serve a relay at a fresh address.
+async fn serve(tmp: &tempfile::TempDir, name: &str, cfg: impl FnOnce(&str) -> FedConfig) -> (AppState, String) {
+    let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let u = format!("http://{}", l.local_addr().unwrap());
+    let s = AppState::isolated(tmp.path().join(name), Some(cfg(&u)));
+    { let s = s.clone(); tokio::spawn(async move { axum::serve(l, app(s)).await.unwrap() }); }
+    (s, u)
+}
+
+/// A4: another key for an address we keep a key for, unsigned by the
+/// known key, waits for the admin as a conflict (it used to be dropped
+/// without a trace); the admin's admit takes the new key.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn key_change_without_signature_goes_pending_conflict() {
+    let (sa, sb, ua, ub, _tmp) = strict_pair().await;
+    let old = fed::current(&sa).unwrap().node_id();
+    // A lost its key (a new data folder): same address, a new key, no chain.
+    let mut c = fed::current(&sa).unwrap().cfg.clone();
+    c.node_key = hex::encode(aqua_core::crypto::SignSecret::generate().to_bytes());
+    c.rotations.clear();
+    c.rotated.clear();
+    if let Ok(mut g) = sa.fed.write() { *g = fed::Fed::new(c); }
+    let new = fed::current(&sa).unwrap().node_id();
+    fed::current(&sa).unwrap().hello_to(&ub).await;
+    let b = fed::current(&sb).unwrap();
+    assert_eq!(b.pin_for(&ua).map(|p| p.id.clone()), Some(old.clone()), "the known key stays");
+    let w = b.cfg.pending_nodes.iter().find(|p| p.id == new).expect("waits for the admin");
+    assert!(w.conflict && w.url == ua);
+    assert_eq!(fed::auth_status(&b)["conflicts"][0]["id"], new.as_str());
+    assert!(fed::admit(&sb, &new));
+    assert_eq!(fed::current(&sb).unwrap().pin_for(&ua).map(|p| p.id.clone()), Some(new));
+}
+
+/// A4: a relay that lost its key gets back in with a fresh invitation token
+/// (the admin of the other side made it — that stands for the admin's word).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn admit_token_recovers_lost_key() {
+    let (sa, sb, ua, ub, _tmp) = strict_pair().await;
+    let token = fed::new_admit_token(&sb).unwrap();
+    let mut c = fed::current(&sa).unwrap().cfg.clone();
+    c.node_key = hex::encode(aqua_core::crypto::SignSecret::generate().to_bytes());
+    c.rotations.clear();
+    c.rotated.clear();
+    c.join_token = token;
+    if let Ok(mut g) = sa.fed.write() { *g = fed::Fed::new(c); }
+    let new = fed::current(&sa).unwrap().node_id();
+    fed::current(&sa).unwrap().hello_to(&ub).await;
+    assert_eq!(fed::current(&sb).unwrap().pin_for(&ua).map(|p| p.id.clone()), Some(new), "the new key, with the token");
+    assert!(fed::current(&sb).unwrap().cfg.pending_nodes.is_empty());
+}
+
+/// A4: during the transition a relay with only the secret said hello in the
+/// name of another relay's address (one that hadn't brought its key yet) and
+/// got its own key pinned there. The address must prove it holds the key.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn url_hijack_before_upgrade_is_refused() {
+    let tmp = tempfile::tempdir().unwrap();
+    let net = |me: &str, peers: Vec<String>| FedConfig { secret: SECRET.into(), peers, public_url: me.into(), mode: "network".into(), ..Default::default() };
+    // O: a relay of the network that hasn't said hello to B yet.
+    let (_so, uo) = serve(&tmp, "o", |u| net(u, vec![])).await;
+    let (sb, ub) = serve(&tmp, "b", |u| net(u, vec![uo.clone()])).await;
+    assert!(!fed::current(&sb).unwrap().enforced());
+    // X has the secret and its own key, and says it is O.
+    let mut cx = net(&uo, vec![ub.clone()]);
+    cx.ephemeral = true;
+    let x = fed::Fed::new(cx).unwrap();
+    x.hello_to(&ub).await;
+    assert!(fed::current(&sb).unwrap().pin_for(&uo).is_none(), "X's key isn't pinned for O's address");
+    // O itself: pinned.
+    let o = fed::current(&_so).unwrap();
+    let mut c = o.cfg.clone();
+    c.peers = vec![ub.clone()];
+    if let Ok(mut g) = _so.fed.write() { *g = fed::Fed::new(c); }
+    fed::current(&_so).unwrap().hello_to(&ub).await;
+    assert_eq!(fed::current(&sb).unwrap().pin_for(&uo).map(|p| p.id.clone()), Some(fed::current(&_so).unwrap().node_id()));
+}
+
+/// A mixed network during the transition: K is keyed, O is a relay of an
+/// older build (signs with the shared secret only — simulated here by plain
+/// secret-signed requests). B takes both until keys are required, then O
+/// only for hellos (it waits for the admin), K as before.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn mixed_network_old_keyed_new() {
+    let tmp = tempfile::tempdir().unwrap();
+    let net = |me: &str, peers: Vec<String>| FedConfig { secret: SECRET.into(), peers, public_url: me.into(), mode: "network".into(), ..Default::default() };
+    let old_url = "http://old.invalid".to_string();
+    let (sb, ub) = serve(&tmp, "b", |u| net(u, vec![old_url.clone()])).await;
+    let (sk, uk) = serve(&tmp, "k", |u| net(u, vec![ub.clone()])).await;
+    let http = reqwest::Client::builder().user_agent(concat!("aqua-client-core/", env!("CARGO_PKG_VERSION"))).build().unwrap();
+    register(&http, &ub, &IdentityKeyPair::generate(), "mixed").await;
+    // K says hello; B has it on no list yet: it's added (secret), then pinned.
+    for _ in 0..30 {
+        fed::current(&sk).unwrap().hello_all().await;
+        fed::absorb_vouches(&sk);
+        if fed::current(&sb).unwrap().pin_for(&uk).is_some() && fed::current(&sk).unwrap().pin_for(&ub).is_some() { break }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(fed::current(&sb).unwrap().pin_for(&uk).is_some());
+    let b = fed::current(&sb).unwrap();
+    assert!(!b.enforced(), "O has no key: still the transition");
+    // The old relay reads (secret only), K reads (key).
+    let old_get = || async {
+        let me = fed::Fed::new(FedConfig { ephemeral: true, ..net("http://old.invalid", vec![ub.clone()]) }).unwrap();
+        let path = "/v1/fed/users?since=0";
+        http.get(format!("{ub}{path}")).header("x-aqua-fed", me.sign("GET", path, b"")).header("user-agent", "aqua-server/1.21.0-22").send().await.unwrap().status().as_u16()
+    };
+    assert_eq!(old_get().await, 200);
+    fed::sync_once(&sk).await;
+    assert!(sk.directory.identity_for("mixed").is_some());
+    // The transition ends.
+    let mut c = b.cfg.clone();
+    c.auth_deadline = 1;
+    if let Ok(mut g) = sb.fed.write() { *g = fed::Fed::new(c); }
+    assert!(fed::current(&sb).unwrap().enforced());
+    assert_eq!(old_get().await, 401, "the old relay is out");
+    register(&http, &ub, &IdentityKeyPair::generate(), "mixed2").await;
+    fed::sync_once(&sk).await;
+    assert!(sk.directory.identity_for("mixed2").is_some(), "the keyed one goes on");
+}
+
+/// A6: B keeps where it is in A's accounts on disk. After a restart (the
+/// same database file) it goes on from there: an account it had and lost
+/// meanwhile isn't read again, a new one is.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cursor_survives_restart() {
+    let tmp = tempfile::tempdir().unwrap();
+    let net = |me: &str, peers: Vec<String>| FedConfig { secret: SECRET.into(), peers, public_url: me.into(), mode: "network".into(), ..Default::default() };
+    let (sa, ua) = serve(&tmp, "a", |u| net(u, vec![])).await;
+    let http = reqwest::Client::builder().user_agent(concat!("aqua-client-core/", env!("CARGO_PKG_VERSION"))).build().unwrap();
+    register(&http, &ua, &IdentityKeyPair::generate(), "first").await;
+    let db = tmp.path().join("b.sqlite").to_string_lossy().to_string();
+    let b_state = |name: &str| {
+        let mut s = AppState::isolated(tmp.path().join(name), Some(net("http://b.invalid", vec![ua.clone()])));
+        s.directory = std::sync::Arc::new(aqua_server::directory::Directory::open_path(&db).unwrap());
+        s
+    };
+    let sb = b_state("b1");
+    fed::sync_once(&sb).await;
+    assert!(sb.directory.identity_for("first").is_some());
+    let at = sb.directory.fed_cursor(&ua, "users").expect("kept");
+    assert_eq!(at.1, "first");
+    drop(sb);
+    // Restart. Meanwhile "first" was lost here (say, a bad restore of one row).
+    let sb = b_state("b2");
+    assert_eq!(sb.directory.fed_cursor(&ua, "users"), Some(at));
+    assert!(sb.directory.delete_person("first"));
+    register(&http, &ua, &IdentityKeyPair::generate(), "second").await;
+    fed::sync_once(&sb).await;
+    assert!(sb.directory.identity_for("second").is_some(), "the new one comes");
+    assert!(sb.directory.identity_for("first").is_none(), "nothing read again from the start");
+    // The admin's resync reads everything again.
+    fed::resync(&sb, Some(&ua), None);
+    fed::sync_once(&sb).await;
+    assert!(sb.directory.identity_for("first").is_some());
+    let _ = sa;
+}
+
+/// A7 end to end: the admin of A deletes an account. B learns it from A's
+/// signed tombstone and deletes its copy; C, an "old" relay that never heard
+/// of it (it doesn't pull tombstones — simulated by never syncing from A),
+/// still has the account and offers it to B: B doesn't take it back. A
+/// tombstone made up by someone with only the secret isn't taken.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn signed_account_deletion_propagates_and_old_relay_cannot_resurrect() {
+    let (sa, sb, ua, ub, tmp) = strict_pair().await;
+    let http = reqwest::Client::builder().user_agent(concat!("aqua-client-core/", env!("CARGO_PKG_VERSION"))).build().unwrap();
+    register(&http, &ua, &IdentityKeyPair::generate(), "leaving").await;
+    fed::sync_once(&sb).await;
+    assert!(sb.directory.identity_for("leaving").is_some());
+    // C: keyed, admitted on B with a token, holding its own copy of the account.
+    let token = fed::new_admit_token(&sb).unwrap();
+    let (sc, _uc) = serve(&tmp, "c", |u| FedConfig { secret: SECRET.into(), peers: vec![ub.clone()], public_url: u.into(), mode: "network".into(), join_token: token, ..Default::default() }).await;
+    let row = sb.directory.fed_users_since(0).into_iter().find(|u| u.username == "leaving").unwrap();
+    assert!(sc.directory.fed_apply_user(&row).applied);
+    for _ in 0..30 {
+        fed::current(&sc).unwrap().hello_all().await;
+        fed::absorb_vouches(&sc);
+        if fed::current(&sb).unwrap().cfg.peers.iter().any(|p| *p == _uc) && fed::current(&sb).unwrap().pin_for(&_uc).is_some() { break }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(fed::current(&sb).unwrap().pin_for(&_uc).is_some(), "C admitted on B");
+    // A's admin deletes it.
+    assert!(aqua_server::delete_account(&sa, "leaving").await);
+    assert!(sa.directory.identity_for("leaving").is_none());
+    fed::sync_once(&sb).await;
+    assert!(sb.directory.identity_for("leaving").is_none(), "B deleted its copy");
+    // C makes its copy "newer" and offers it.
+    let mut newer = row.clone();
+    newer.updated_at += 10_000;
+    newer.display_name = "back again".into();
+    assert!(sc.directory.fed_apply_user(&newer).applied);
+    fed::sync_once(&sb).await;
+    assert!(sb.directory.identity_for("leaving").is_none(), "an old relay doesn't bring it back");
+    // A forged tombstone (secret only, someone else's key): not taken.
+    register(&http, &ua, &IdentityKeyPair::generate(), "staying").await;
+    fed::sync_once(&sb).await;
+    let (uid, created) = sb.directory.account_generation("staying").unwrap();
+    let evil = fed::Fed::new(FedConfig { secret: SECRET.into(), peers: vec![], public_url: "http://evil.invalid".into(), mode: "network".into(), ephemeral: true, ..Default::default() }).unwrap();
+    let forged = evil.sign_tomb(&uid, "staying", created, 1);
+    assert!(!fed::current(&sb).unwrap().verify_tomb(&forged));
+    let claimed = aqua_server::directory::Tomb { origin: fed::current(&sa).unwrap().node_id(), ..forged };
+    assert!(!fed::current(&sb).unwrap().verify_tomb(&claimed), "A's id, another key's signature");
+    assert!(sb.directory.identity_for("staying").is_some());
+}
+
+/// A7: the deleted account's @name is free: someone signs up with it anew
+/// (another key and ID) and keeps it across the network.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn same_name_reregistered_after_deletion_keeps_it() {
+    let (sa, sb, ua, ub, _tmp) = strict_pair().await;
+    let http = reqwest::Client::builder().user_agent(concat!("aqua-client-core/", env!("CARGO_PKG_VERSION"))).build().unwrap();
+    register(&http, &ua, &IdentityKeyPair::generate(), "phoenix").await;
+    fed::sync_once(&sb).await;
+    assert!(aqua_server::delete_account(&sa, "phoenix").await);
+    fed::sync_once(&sb).await;
+    assert!(sb.directory.identity_for("phoenix").is_none());
+    let id2 = IdentityKeyPair::generate();
+    register(&http, &ub, &id2, "phoenix").await;
+    fed::sync_once(&sa).await;
+    assert_eq!(sa.directory.identity_for("phoenix"), Some(*id2.public().dh_pub.as_bytes()), "the new one, on A too");
+    fed::sync_once(&sb).await;
+    assert_eq!(sb.directory.identity_for("phoenix"), Some(*id2.public().dh_pub.as_bytes()), "and kept on B");
+}
+
+/// A9: an `aqpass` v2 carries the home relay's node signature next to the
+/// HMAC. A relay of an older build reads only the HMAC (checked here the
+/// way it does) and takes it; a solo relay that requires keys takes it only
+/// with a good signature — a pass made with the secret alone is refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn aqpass_v2_accepted_by_old_and_new_solo() {
+    use base64::Engine;
+    let tmp = tempfile::tempdir().unwrap();
+    let (sa, ua) = serve(&tmp, "a", |u| FedConfig { secret: SECRET.into(), peers: vec![], public_url: u.into(), mode: "network".into(), ..Default::default() }).await;
+    let admit = fed::new_admit_token(&sa).unwrap();
+    let (ss, us) = serve(&tmp, "s", |u| FedConfig { secret: SECRET.into(), peers: vec![ua.clone()], public_url: u.into(), mode: "solo".into(), join_token: admit, ..Default::default() }).await;
+    fed::names_hello(&fed::registry(&ss).unwrap()).await;
+    fed::absorb_vouches(&ss);
+    assert!(fed::registry(&ss).unwrap().pin_for(&ua).is_some());
+    assert!(fed::registry(&ss).unwrap().enforced(), "the solo relay knows its only peer's key: keys required");
+    {
+        let mut c = ss.admin.write().unwrap();
+        c.invite_only = true;
+        c.allow = vec![format!("*@{}", aqua_server::host_of(&ua))];
+    }
+    let http = reqwest::Client::builder().user_agent(concat!("aqua-client-core/", env!("CARGO_PKG_VERSION"))).build().unwrap();
+    let bob = register(&http, &ua, &IdentityKeyPair::generate(), "passbob").await;
+    let new_pass = || async {
+        let r: serde_json::Value = http.post(format!("{ua}/v1/me/pass")).bearer_auth(&bob).json(&serde_json::json!({})).send().await.unwrap().json().await.unwrap();
+        r["pass"].as_str().unwrap().to_string()
+    };
+    let signup = |pass: String, user: &'static str| { let http = http.clone(); let us = us.clone(); async move {
+        let id = IdentityKeyPair::generate();
+        let tok = token(&http, &us, &id).await;
+        http.post(format!("{us}/v1/users/signup")).bearer_auth(&tok)
+            .json(&serde_json::json!({ "username": user, "password": "a-good-secret", "invite": pass })).send().await.unwrap().status().as_u16()
+    }};
+    // The old way of checking: HMAC over the payload with the secret.
+    let pass = new_pass().await;
+    let (payload, mac) = pass.strip_prefix("aqpass:").unwrap().split_once('.').unwrap();
+    let want = hex::encode(aqua_core::crypto::hmac_sha256(SECRET.as_bytes(), format!("aqpass|{payload}").as_bytes()));
+    assert_eq!(mac, want, "an older relay still takes it");
+    let v: serde_json::Value = serde_json::from_slice(&base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload).unwrap()).unwrap();
+    assert_eq!(v["k"], fed::current(&sa).unwrap().node_id().as_str());
+    // The new solo relay: signed — taken, once.
+    assert_eq!(signup(pass.clone(), "passone").await, 204);
+    assert_eq!(signup(pass, "passtwo").await, 403, "a pass works once");
+    // Made with the secret only (no k / s): refused once keys are required.
+    let pass = new_pass().await;
+    let (payload, _) = pass.strip_prefix("aqpass:").unwrap().split_once('.').unwrap();
+    let mut v: serde_json::Value = serde_json::from_slice(&base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload).unwrap()).unwrap();
+    v.as_object_mut().unwrap().remove("k");
+    v.as_object_mut().unwrap().remove("s");
+    let p2 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(v.to_string());
+    let forged = format!("aqpass:{p2}.{}", hex::encode(aqua_core::crypto::hmac_sha256(SECRET.as_bytes(), format!("aqpass|{p2}").as_bytes())));
+    assert_eq!(signup(forged, "passthree").await, 403);
+    // Another user's name in a signed pass: the signature doesn't match.
+    let pass = new_pass().await;
+    let (payload, _) = pass.strip_prefix("aqpass:").unwrap().split_once('.').unwrap();
+    let mut v: serde_json::Value = serde_json::from_slice(&base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload).unwrap()).unwrap();
+    v["u"] = "someoneelse".into();
+    let p3 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(v.to_string());
+    let changed = format!("aqpass:{p3}.{}", hex::encode(aqua_core::crypto::hmac_sha256(SECRET.as_bytes(), format!("aqpass|{p3}").as_bytes())));
+    assert_eq!(signup(changed, "passfour").await, 403);
+}
+
+/// Partial download: B pulls A's account while A's avatar can't be fetched
+/// (the proxy in between fails media requests). The account must not be
+/// marked as fully taken: once media answers again, the avatar arrives.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn media_failing_then_recovering_is_fetched_later() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static FAIL: AtomicBool = AtomicBool::new(true);
+    let la = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let lp = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let real_a = format!("http://{}", la.local_addr().unwrap());
+    let up = format!("http://{}", lp.local_addr().unwrap());
+    let tmp = tempfile::tempdir().unwrap();
+    let net = |me: &str, peers: Vec<String>| FedConfig { secret: SECRET.into(), peers, public_url: me.into(), mode: "network".into(), ..Default::default() };
+    let sa = AppState::isolated(tmp.path().join("a"), Some(net(&up, vec![])));
+    { let s = sa.clone(); tokio::spawn(async move { axum::serve(la, app(s)).await.unwrap() }); }
+    {
+        let client = reqwest::Client::new();
+        let real_a = real_a.clone();
+        let proxy = axum::Router::new().fallback(move |req: axum::extract::Request| {
+            let (real_a, client) = (real_a.clone(), client.clone());
+            async move {
+                let (parts, body) = req.into_parts();
+                let pq = parts.uri.path_and_query().map(|p| p.as_str().to_string()).unwrap_or_default();
+                if FAIL.load(Ordering::SeqCst) && pq.starts_with("/v1/fed/media/") {
+                    return axum::http::Response::builder().status(502).body(axum::body::Body::empty()).unwrap();
+                }
+                let body = axum::body::to_bytes(body, 64 << 20).await.unwrap();
+                let mut rb = client.request(parts.method.clone(), format!("{real_a}{pq}")).body(body.to_vec());
+                for (k, v) in parts.headers.iter() { if k != "host" { rb = rb.header(k, v); } }
+                let r = rb.send().await.unwrap();
+                let mut out = axum::http::Response::builder().status(r.status());
+                for (k, v) in r.headers().iter() { if k != "content-length" && k != "transfer-encoding" { out = out.header(k, v); } }
+                out.body(axum::body::Body::from(r.bytes().await.unwrap())).unwrap()
+            }
+        });
+        tokio::spawn(async move { axum::serve(lp, proxy).await.unwrap() });
+    }
+    let (sb, _ub) = serve(&tmp, "b", |u| net(u, vec![up.clone()])).await;
+    let http = reqwest::Client::builder().user_agent(concat!("aqua-client-core/", env!("CARGO_PKG_VERSION"))).build().unwrap();
+    let id = IdentityKeyPair::generate();
+    register(&http, &real_a, &id, "pictured").await;
+    let png = include_bytes!("../../../site/assets/emoji/1f47b.webp").to_vec();
+    sa.directory.set_media("pictured", id.public().dh_pub.as_bytes(), aqua_server::directory::MediaKind::parse("avatar").unwrap(), "image/webp", &png).unwrap();
+    fed::sync_once(&sb).await;
+    assert!(sb.directory.identity_for("pictured").is_none(), "media failed: the row isn't taken without it (tried again later)");
+    FAIL.store(false, Ordering::SeqCst);
+    fed::sync_once(&sb).await;
+    assert!(sb.directory.identity_for("pictured").is_some());
+    assert_eq!(sb.directory.get_media("pictured", aqua_server::directory::MediaKind::parse("avatar").unwrap()).map(|m| m.1), Some(png), "the avatar came with it");
+}
+
+/// A relay was off while A deleted many accounts. When it's back, it takes
+/// the deletions — 20 per hour from one relay by themselves, the rest wait
+/// (they aren't skipped: the cursor stays before them).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tombstones_after_a_long_absence_and_the_hourly_limit() {
+    let (sa, sb, ua, _ub, _tmp) = strict_pair().await;
+    let http = reqwest::Client::builder().user_agent(concat!("aqua-client-core/", env!("CARGO_PKG_VERSION"))).build().unwrap();
+    let names: Vec<String> = (0..25).map(|i| format!("gone{i:02}")).collect();
+    for n in &names { register(&http, &ua, &IdentityKeyPair::generate(), n).await; }
+    fed::sync_once(&sb).await;
+    assert!(names.iter().all(|n| sb.directory.identity_for(n).is_some()));
+    // B is "off" (doesn't sync) while A deletes them all.
+    for n in &names { assert!(aqua_server::delete_account(&sa, n).await); }
+    fed::sync_once(&sb).await;
+    let left = names.iter().filter(|n| sb.directory.identity_for(n).is_some()).count();
+    assert_eq!(left, 5, "20 applied by themselves, 5 wait");
+    fed::sync_once(&sb).await;
+    assert_eq!(names.iter().filter(|n| sb.directory.identity_for(n).is_some()).count(), 5, "still waiting within the hour");
+    // Waiting ones aren't lost: the cursor stays before them.
+    let cur = sb.directory.fed_cursor(&ua, "tombs").unwrap();
+    let pending = sa.directory.tombs_after(cur.0, Some(&cur.1).filter(|s| !s.is_empty()).map(|s| s.as_str()), 100);
+    assert_eq!(pending.len(), 5);
+}
+
+/// Review of #113: the replay table alone takes ~220 000/s; that says little
+/// of a whole federated request. Here: signed (v2 + shared secret), sent
+/// over HTTP, checked (Ed25519, the clock, the replay table with its file)
+/// and answered — `/v1/fed/ping` without a database, `/v1/fed/users` with a
+/// SQLite read of 200 accounts — 64 at a time. Printed; run with
+/// `--ignored --nocapture fed_request_throughput`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+#[ignore = "measurement"]
+async fn fed_request_throughput() {
+    let (sa, sb, ua, _ub, _tmp) = strict_pair().await;
+    let http = reqwest::Client::builder().user_agent(concat!("aqua-client-core/", env!("CARGO_PKG_VERSION"))).build().unwrap();
+    for i in 0..200 {
+        register(&http, &ua, &IdentityKeyPair::generate(), &format!("load{i}")).await;
+    }
+    let b = fed::current(&sb).unwrap();
+    // The signing side alone, for comparison.
+    let t = std::time::Instant::now();
+    for _ in 0..2000 {
+        std::hint::black_box(b.sign2(&ua, "GET", "/v1/fed/ping", b""));
+    }
+    println!("sign2 alone: {:.1} µs each", t.elapsed().as_micros() as f64 / 2000.0);
+    for path in ["/v1/fed/ping", "/v1/fed/users?since=0"] {
+        let n = 4000usize;
+        let next = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let t = std::time::Instant::now();
+        let workers: Vec<_> = (0..64)
+            .map(|_| {
+                let (b, ua, next, http) = (b.clone(), ua.clone(), next.clone(), http.clone());
+                tokio::spawn(async move {
+                    let mut lat = Vec::new();
+                    while next.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < n {
+                        let t = std::time::Instant::now();
+                        let r = http.get(format!("{ua}{path}"))
+                            .header("x-aqua-fed", b.sign("GET", path, b""))
+                            .header("x-aqua-fed2", b.sign2(&ua, "GET", path, b"").unwrap())
+                            .header("user-agent", concat!("aqua-server/", env!("CARGO_PKG_VERSION")))
+                            .send().await.unwrap();
+                        assert!(r.status().is_success(), "{path}: {}", r.status());
+                        r.bytes().await.unwrap();
+                        lat.push(t.elapsed().as_micros() as u64);
+                    }
+                    lat
+                })
+            })
+            .collect();
+        let mut lat: Vec<u64> = Vec::new();
+        for w in workers {
+            lat.extend(w.await.unwrap());
+        }
+        let el = t.elapsed();
+        lat.sort_unstable();
+        let q = |p: f64| lat[((lat.len() as f64 * p) as usize).min(lat.len() - 1)];
+        println!("{path}: {} signed requests in {el:?} — {:.0}/s, p50 {} µs, p99 {} µs (client and relay on one machine)",
+            lat.len(), lat.len() as f64 / el.as_secs_f64(), q(0.5), q(0.99));
+    }
+    drop(sa);
 }

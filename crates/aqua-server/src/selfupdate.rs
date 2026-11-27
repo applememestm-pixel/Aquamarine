@@ -410,6 +410,8 @@ pub fn run_newest() {
 
 /// Replace this process with `bin` (same arguments).
 fn restart_as(bin: &Path) {
+    // Used signatures on disk and marked clean before the new one starts.
+    crate::replay::Replay::shutdown_all();
     let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
     #[cfg(unix)]
     {
@@ -511,6 +513,7 @@ fn restart_into(bin: PathBuf, before_exit: impl FnOnce() + Send + 'static) {
             }
         }
         restart_as(&bin);
+        crate::replay::Replay::shutdown_all();
         std::process::exit(75);
     });
 }

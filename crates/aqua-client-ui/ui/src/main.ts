@@ -3,6 +3,7 @@ import { mount } from "svelte";
 import "./app.css";
 import { IS_DESKTOP } from "./lib/platform";
 import { accountBoot } from "./lib/accounts";
+import { api } from "./lib/tauri";
 import { startInsets } from "./lib/insets";
 
 // Phones and tablets: no desktop title bar even when the screen is turned
@@ -153,7 +154,12 @@ const pop = popId ? [location.hash, encodeURIComponent(popId)] : /^#popout=(.+)$
 if (pop) document.documentElement.classList.add("popout");
 // Another account's storage left over from a switch: sorted out first.
 const reloading = !pop && await accountBoot();
-const app = reloading ? undefined : pop
+// The account's data can't be opened (vault_key.rs): only the recovery
+// screen — nothing else of the app starts.
+const locked = reloading || pop ? null : await api.vaultBootState().catch(() => null);
+const app = reloading ? undefined : locked
+  ? mount((await import("./lib/components/RecoveryScreen.svelte")).default, { target, props: { info: locked } })
+  : pop
   ? mount((await import("./Popout.svelte")).default, { target, props: { chat: decodeURIComponent(pop[1]) } })
   : mount(App, { target });
 export default app;

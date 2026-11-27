@@ -139,6 +139,72 @@ pub struct FedConfig {
     /// the others, so they admit us too).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub vouches: Vec<Vouch>,
+    /// Node keys required (owner, 26.11): "" (a config from before — set to
+    /// "transition" at the first start), "transition" (requests signed only
+    /// with the shared secret are still taken from relays without a pinned
+    /// key) or "enforced" (never again, see [`Fed::enforced`]). Only ever
+    /// moves forward: transition → enforced when every peer's key is known,
+    /// at `auth_deadline`, or by the admin.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub auth_mode: String,
+    /// Unix seconds: the end of the transition.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub auth_deadline: u64,
+    /// Unix seconds: when keys became required here.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub enforced_at: u64,
+    /// Unix seconds: the admin let relays without keys in again until then
+    /// (`/v1/admin/fed/auth`, at most [`LEGACY_MAX_DAYS`]); ends by itself.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub legacy_until: u64,
+    /// This relay's last key changes, each signed by the key before it
+    /// (newest last, at most [`MAX_ROTATIONS`]): a peer that was off for
+    /// two changes follows the chain.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rotations: Vec<RotStep>,
+    /// Node ids of peers we followed away from (their keys changed): never
+    /// taken again, like revoked ones.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub retired: Vec<String>,
+    /// Keys of those retired ids and when we followed away from them
+    /// (`[id, key hex, unix secs]`): deletions a relay signed with its key
+    /// before it changed are still taken — none signed after that.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub retired_keys: Vec<(String, String, u64)>,
+}
+
+/// One key change: `old` (public key, hex) signed
+/// `aqua-fed-rotate-v2\n{url}\n{old_id}\n{new}\n{seq}`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RotStep {
+    pub old: String,
+    pub new: String,
+    pub seq: u64,
+    pub sig: String,
+}
+
+/// Key changes a relay keeps and sends in its hellos.
+pub const MAX_ROTATIONS: usize = 8;
+
+fn rot_message(url: &str, old_id: &str, new_pub: &str, seq: u64) -> String {
+    format!("aqua-fed-rotate-v2\n{url}\n{old_id}\n{new_pub}\n{seq}")
+}
+
+fn is_zero(v: &u64) -> bool { *v == 0 }
+
+/// How long a network keeps taking relays without keys after this version
+/// first starts (the owner named no term: our choice, told to the owner).
+pub const AUTH_TRANSITION_DAYS: u64 = 14;
+/// The panel and the log warn this long before the transition ends.
+pub const AUTH_WARN_DAYS: u64 = 3;
+/// Longest window the admin can open for relays without keys.
+pub const LEGACY_MAX_DAYS: u64 = 7;
+const DAY: u64 = 24 * 3600;
+
+/// `AQUA_FED_AUTH=enforced`: keys required whatever the config says (it can
+/// only make it stricter; there is no value that makes it laxer).
+fn env_enforced() -> bool {
+    std::env::var("AQUA_FED_AUTH").is_ok_and(|v| v.trim().eq_ignore_ascii_case("enforced"))
 }
 
 /// "Relay `by` admitted node `id` at `url`": Ed25519 by `by`'s node key over
@@ -167,6 +233,31 @@ pub struct Pin {
     pub id: String,
     /// Its Ed25519 public key, hex.
     pub key: String,
+    /// "network" (a relay of the network; "" in configs from before) or
+    /// "names" (a solo relay sharing only the name registry: it may only
+    /// read and announce names).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub role: String,
+    /// Unix seconds: when it was pinned.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub since: u64,
+    /// The last key change of it we followed (`rotations`, 1.21.0-25).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub rot_seq: u64,
+    /// Waiting for the admin: it came with another key for an address we
+    /// keep a key for, unsigned by that key (`pending_nodes` only).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub conflict: bool,
+}
+
+impl Pin {
+    pub fn names_only(&self) -> bool {
+        self.role == "names"
+    }
+    /// The same relay under the same key (when and how it was pinned aside).
+    fn same(&self, o: &Pin) -> bool {
+        self.url == o.url && self.id == o.id && self.key == o.key && self.names_only() == o.names_only()
+    }
 }
 
 fn valid_key_hex(s: &str) -> bool {
@@ -264,6 +355,39 @@ impl FedConfig {
     pub fn registry(&self) -> bool {
         self.mode == "solo" && self.secret.len() >= 16 && !self.peers.is_empty()
     }
+    /// Every peer's key is known (and at least one relay of the network is
+    /// keyed, or one was revoked).
+    pub fn all_keys_known(&self) -> bool {
+        (self.pins.iter().any(|p| !p.names_only()) || !self.revoked.is_empty())
+            && self.peers.iter().all(|u| self.pins.iter().any(|p| p.url == *u && !p.names_only()))
+    }
+
+    /// Move the key requirement forward when it's time (never back). True
+    /// when something changed (to be saved).
+    pub fn settle(&mut self, now: u64) -> bool {
+        if !(self.active() || self.registry()) {
+            return false;
+        }
+        let before = (self.auth_mode.clone(), self.auth_deadline, self.enforced_at, self.legacy_until);
+        if self.auth_mode.is_empty() {
+            self.auth_mode = "transition".into();
+            self.auth_deadline = now + AUTH_TRANSITION_DAYS * DAY;
+        }
+        if self.auth_mode != "enforced" && (env_enforced() || self.all_keys_known() || now >= self.auth_deadline) {
+            if self.auth_mode != "transition" {
+                tracing::error!(mode = %self.auth_mode, "federation: unknown key requirement in the config — keys are required now");
+            }
+            self.auth_mode = "enforced".into();
+            self.enforced_at = now;
+            tracing::warn!("federation: node keys are required from now on (requests signed only with the shared secret are refused)");
+        }
+        if self.legacy_until != 0 && (now >= self.legacy_until || env_enforced()) {
+            self.legacy_until = 0;
+            tracing::warn!("federation: the window for relays without keys is over");
+        }
+        before != (self.auth_mode.clone(), self.auth_deadline, self.enforced_at, self.legacy_until)
+    }
+
     /// "solo" / "network" / "" — what the panel shows.
     pub fn effective_mode(&self) -> &str {
         if self.mode.is_empty() && self.secret.len() >= 16 && !self.peers.is_empty() { "network" } else { &self.mode }
@@ -315,18 +439,58 @@ pub fn parse_invite(s: &str) -> Option<(String, String)> {
     (url.starts_with("http") && secret.len() >= 16).then_some((url, secret))
 }
 
+/// Change the federation config: read, change, save and put in place under
+/// one lock. Each change used to read the config, change a copy and write it
+/// back on its own — two at once (a hello pinning a key while vouches were
+/// kept) and the later one wrote back a copy without the other's change.
+/// `f` says whether it changed anything; it must not read `state.fed`.
+/// Returns the new network when it changed and was saved.
+pub(crate) fn update_cfg(state: &AppState, f: impl FnOnce(&Fed, &mut FedConfig) -> bool) -> Option<Arc<Fed>> {
+    let mut g = state.fed.write().unwrap_or_else(|e| e.into_inner());
+    let cur = g.clone()?;
+    let mut c = cur.cfg.clone();
+    if !f(&cur, &mut c) {
+        return None;
+    }
+    if !c.ephemeral {
+        if let Err(e) = c.save() {
+            tracing::error!(error = %e, "federation: the config can't be saved — the change is dropped");
+            return None;
+        }
+    }
+    let next = Fed::new_after(c, &cur);
+    *g = next.clone();
+    next
+}
+
+/// The admin's change of the federation settings (panel, invitation): like
+/// [`update_cfg`] under the same lock, but also when no network runs yet
+/// (the config is then read from disk). Returns what runs after it.
+pub fn admin_update(state: &AppState, f: impl FnOnce(&mut FedConfig)) -> std::io::Result<Option<Arc<Fed>>> {
+    let mut g = state.fed.write().unwrap_or_else(|e| e.into_inner());
+    let cur = g.clone();
+    let mut c = cur.as_ref().map(|x| x.cfg.clone()).unwrap_or_else(FedConfig::load);
+    f(&mut c);
+    if !c.ephemeral {
+        c.save()?;
+    }
+    let next = match &cur { Some(old) => Fed::new_after(c, old), None => Fed::new(c) };
+    *g = next.clone();
+    Ok(next)
+}
+
 /// Add relays to the peer list (saved, and the live config replaced).
 /// Returns the ones that were new.
 pub fn add_peers(state: &AppState, urls: &[String]) -> Vec<String> {
-    let cur = current(state);
-    // REV2-004: once every peer's key is known, only relays whose key we
-    // keep (admitted) join the list. Before, any address a hello named that
-    // answered our secret was added — an unkeyed peer that switched strict
-    // mode off again.
-    let strict = cur.as_ref().is_some_and(|f| f.strict());
-    let mut c = cur.map(|f| f.cfg.clone()).unwrap_or_else(FedConfig::load);
-    let me = my_id(&c);
+    if current(state).is_none() {
+        return Vec::new();
+    }
     let mut added = Vec::new();
+    update_cfg(state, |f, c| {
+    // REV2-004: once keys are required, only relays whose key we keep
+    // (admitted) join the list.
+    let strict = f.enforced();
+    let me = my_id(c);
     for u in urls {
         let u = u.trim().trim_end_matches('/').to_string();
         if !(u.starts_with("http") || u.starts_with("tunnel:")) || u == me || c.peers.contains(&u) || c.peers.len() >= 64 {
@@ -338,9 +502,9 @@ pub fn add_peers(state: &AppState, urls: &[String]) -> Vec<String> {
         c.peers.push(u.clone());
         added.push(u);
     }
-    if !added.is_empty() && (c.ephemeral || c.save().is_ok()) {
-        let next = Fed::new(c);
-        if let Ok(mut g) = state.fed.write() { *g = next; }
+    !added.is_empty()
+    });
+    if !added.is_empty() {
         tracing::info!(?added, "federation: new peers");
     }
     added
@@ -358,23 +522,27 @@ pub fn my_id(cfg: &FedConfig) -> String {
 
 /// A peer polling us over a reverse link (fedtunnel.rs): keep it in the
 /// list under `id`, dropping `addr` — the address of it that never answered.
-pub fn adopt_peer(state: &AppState, id: &str, addr: &str) {
-    let Some(f) = current(state) else { return };
-    let has = f.cfg.peers.iter().any(|p| p == id);
-    let stale = !addr.is_empty() && addr != id && f.cfg.peers.iter().any(|p| p == addr);
-    if has && !stale {
-        return;
-    }
-    let mut c = f.cfg.clone();
-    if stale {
-        c.peers.retain(|p| p != addr);
-    }
-    if !has && c.peers.len() < 64 && id != my_id(&c) {
-        c.peers.push(id.to_string());
-    }
-    if c.ephemeral || c.save().is_ok() {
-        let next = Fed::new(c);
-        if let Ok(mut g) = state.fed.write() { *g = next; }
+/// The address is dropped only on the word of the relay whose key is pinned
+/// for it (`sender`): anyone else with the secret named addresses of other
+/// relays and took them out of the list.
+pub fn adopt_peer(state: &AppState, id: &str, addr: &str, sender: &Sender) {
+    if current(state).is_none() { return }
+    let changed = update_cfg(state, |f, c| {
+        let has = c.peers.iter().any(|p| p == id);
+        let owns_addr = f.pin_for(addr).is_some_and(|p| matches!(sender, Sender::Node(n) if *n == p.id));
+        let stale = !addr.is_empty() && addr != id && owns_addr && c.peers.iter().any(|p| p == addr);
+        if has && !stale {
+            return false;
+        }
+        if stale {
+            c.peers.retain(|p| p != addr);
+        }
+        if !has && c.peers.len() < 64 && id != my_id(c) {
+            c.peers.push(id.to_string());
+        }
+        true
+    });
+    if changed.is_some() {
         tracing::info!(peer = %id, "federation: a peer behind a router linked back to us");
         state.fed_kick.notify_one();
     }
@@ -396,12 +564,24 @@ fn is_down(peer: &str) -> bool {
     down().lock().ok().and_then(|d| d.get(peer).map(|t| t.elapsed() < Duration::from_secs(300))).unwrap_or(false)
 }
 
+/// Who signed a federation request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Sender {
+    /// A relay by its pinned node key (`x-aqua-fed2`): its node id.
+    Node(String),
+    /// Only the network's shared secret (`x-aqua-fed`): any holder of it.
+    Secret,
+}
+
 pub struct Fed {
     pub cfg: FedConfig,
     http: reqwest::Client,
     key: aqua_core::crypto::SignSecret,
     /// Vouches peers sent back to our hellos, to be kept (`absorb_vouches`).
     got_vouches: std::sync::Mutex<Vec<Vouch>>,
+    /// Keys of peers read from their hello answers, to be pinned
+    /// (`absorb_vouches`).
+    got_pins: std::sync::Mutex<Vec<Pin>>,
     /// Which signed requests we have already taken.
     replay: Arc<crate::replay::Replay>,
 }
@@ -453,6 +633,12 @@ impl Fed {
         if !cfg.active() && !cfg.registry() {
             return None;
         }
+        // Kept on disk right away: after a restart it can't step back.
+        if cfg.settle(now_secs()) && !cfg.ephemeral && !cfg.dir.as_os_str().is_empty() {
+            if let Err(e) = cfg.save() {
+                tracing::error!(error = %e, "federation: the key requirement can't be saved");
+            }
+        }
         // A config made in memory (tests, the panel before saving): a key now.
         let key = hex::decode(&cfg.node_key).ok().and_then(|b| <[u8; 32]>::try_from(b).ok()).map(aqua_core::crypto::SignSecret::from_bytes);
         let key = match key {
@@ -472,7 +658,18 @@ impl Fed {
         let seen = (!cfg.ephemeral && !cfg.dir.as_os_str().is_empty())
             .then(|| std::env::current_dir().unwrap_or_default().join(&cfg.dir).join(SEEN_FILE));
         let replay = crate::replay::Replay::shared(seen, SKEW_MS, now_ms());
-        Some(Arc::new(Self { cfg, http, key, got_vouches: std::sync::Mutex::new(Vec::new()), replay }))
+        Some(Arc::new(Self { cfg, http, key, got_vouches: std::sync::Mutex::new(Vec::new()), got_pins: std::sync::Mutex::new(Vec::new()), replay }))
+    }
+
+    /// [`Self::new`] replacing `old`: what its hellos collected and wasn't
+    /// kept yet (vouches, keys from answers) carries over.
+    fn new_after(cfg: FedConfig, old: &Fed) -> Option<Arc<Self>> {
+        let next = Self::new(cfg)?;
+        for (from, to) in [(&old.got_vouches, &next.got_vouches)] {
+            if let (Ok(mut a), Ok(mut b)) = (from.lock(), to.lock()) { b.append(&mut a); }
+        }
+        if let (Ok(mut a), Ok(mut b)) = (old.got_pins.lock(), next.got_pins.lock()) { b.append(&mut a); }
+        Some(next)
     }
 
     /// The `x-aqua-fed` header for a request (fedtunnel.rs signs its polls).
@@ -488,9 +685,68 @@ impl Fed {
         hex::encode(self.key.public().as_bytes())
     }
 
+    /// An account pass (`aqpass` v2): the node key's signature over
+    /// `aqpass-v2\n{u}\n{i}\n{h}\n{x}\n{n}` — (node id, signature hex).
+    pub fn sign_pass(&self, msg: &str) -> (String, String) {
+        (self.node_id(), hex::encode(self.key.sign(msg.as_bytes())))
+    }
+
+    /// A pass's v2 signature: by `k`, a relay of the network we keep a key
+    /// for at the pass's home host `h`. None: no v2 fields, or `k` isn't a
+    /// relay we keep a key for.
+    pub fn pass_signed_by(&self, k: &str, sig: &str, msg: &str, host: &str) -> Option<bool> {
+        if k.is_empty() && sig.is_empty() {
+            return None;
+        }
+        if self.is_revoked(k) {
+            return Some(false);
+        }
+        // A relay whose key we don't keep (yet): can't be checked — the
+        // caller decides (taken on the HMAC only during the transition).
+        let pin = self.cfg.pins.iter().find(|p| p.id == k && !p.names_only())?;
+        if crate::host_of(&pin.url) != host {
+            return Some(false);
+        }
+        let (Some(key), Some(sig)) = (hex::decode(&pin.key).ok().and_then(|b| <[u8; 32]>::try_from(b).ok()), hex::decode(sig).ok().and_then(|b| <[u8; 64]>::try_from(b).ok())) else { return Some(false) };
+        Some(aqua_core::crypto::SignPublic::from_bytes(key).verify(msg.as_bytes(), &sig).is_ok())
+    }
+
+    /// Use up `key` (a pass's nonce) for good: in the same table as signed
+    /// requests (on disk, survives a restart), kept until `until_ms` and a
+    /// clock window after.
+    pub fn take_once(&self, sender: &str, key: &str, until_ms: i64) -> bool {
+        self.replay.take(sender, key, until_ms, now_ms())
+    }
+
+    /// A tombstone for an account deleted here, signed by our node key (A7).
+    pub fn sign_tomb(&self, uid: &str, username: &str, created_at: i64, deleted_at: i64) -> crate::directory::Tomb {
+        let mut t = crate::directory::Tomb { uid: uid.into(), created_at, username: username.into(), deleted_at, origin: self.node_id(), ..Default::default() };
+        t.sig = hex::encode(self.key.sign(t.message().as_bytes()));
+        t
+    }
+
+    /// Signed by the relay it names (`origin`), whose key we keep and which
+    /// isn't revoked.
+    pub fn verify_tomb(&self, t: &crate::directory::Tomb) -> bool {
+        if self.cfg.revoked.iter().any(|r| *r == t.origin) || LEAKED_NODE_IDS.contains(&t.origin.as_str()) {
+            return false;
+        }
+        // The relay's current key; or a key it changed away from, for
+        // deletions made before we followed the change.
+        let key = match self.cfg.pins.iter().find(|p| p.id == t.origin && !p.names_only()) {
+            Some(pin) => pin.key.clone(),
+            None => match self.cfg.retired_keys.iter().find(|x| x.0 == t.origin) {
+                Some((_, k, at)) if t.deleted_at >= 0 && (t.deleted_at as u64) <= *at => k.clone(),
+                _ => return false,
+            },
+        };
+        let (Some(k), Some(sig)) = (hex::decode(&key).ok().and_then(|b| <[u8; 32]>::try_from(b).ok()), hex::decode(&t.sig).ok().and_then(|b| <[u8; 64]>::try_from(b).ok())) else { return false };
+        aqua_core::crypto::SignPublic::from_bytes(k).verify(t.message().as_bytes(), &sig).is_ok()
+    }
+
     /// Revoked here, or a published key (`LEAKED_NODE_IDS`).
     pub fn is_revoked(&self, id: &str) -> bool {
-        self.cfg.revoked.iter().any(|r| r == id) || LEAKED_NODE_IDS.contains(&id)
+        self.cfg.revoked.iter().any(|r| r == id) || self.cfg.retired.iter().any(|r| r == id) || LEAKED_NODE_IDS.contains(&id)
     }
 
     /// The key we keep for `peer` (by address), if any.
@@ -499,12 +755,20 @@ impl Fed {
         self.cfg.pins.iter().find(|p| p.url == peer)
     }
 
-    /// Every configured peer's key is known: requests signed only with the
-    /// shared secret are refused (except hello / ping / names).
-    pub fn strict(&self) -> bool {
-        // Also after the last keyed peer was revoked (pins of others or the
-        // revocation list remain): a revoked relay can't step back to the secret.
-        (!self.cfg.pins.is_empty() || !self.cfg.revoked.is_empty()) && self.cfg.peers.iter().all(|p| self.pin_for(p).is_some())
+    /// Node keys are required: requests signed only with the shared secret
+    /// are refused (except hello / ping / names-hello, which only queue a
+    /// relay for the admin). Unlike `strict()` before it, this isn't worked
+    /// out from the peer list on each request (any relay without a key put
+    /// on the list switched it off): it's a state kept in the config that
+    /// only moves forward ([`FedConfig::settle`]). Only the admin's window
+    /// for relays without keys lifts it, until that window ends.
+    pub fn enforced(&self) -> bool {
+        if env_enforced() {
+            return true;
+        }
+        let now = now_secs();
+        let on = self.cfg.auth_mode == "enforced" || self.cfg.all_keys_known() || (self.cfg.auth_deadline != 0 && now >= self.cfg.auth_deadline);
+        on && self.cfg.legacy_until <= now
     }
 
     /// The `x-aqua-fed2` header for a request to `peer`, when we know its key.
@@ -533,7 +797,7 @@ impl Fed {
         aqua_core::crypto::SignPublic::from_bytes(key)
             .verify(v2_message(method, path, ts, nonce, from, to, body).as_bytes(), &sig)
             .ok()?;
-        self.replay.take(&format!("v2:{from}:{nonce}"), ts, now_ms()).then(|| from.to_string())
+        self.replay.take(from, &format!("v2:{from}:{nonce}"), ts, now_ms()).then(|| from.to_string())
     }
 
     /// Add both signatures to a request to `peer`.
@@ -578,10 +842,14 @@ impl Fed {
     /// they don't hold), and — after a key change — the new key signed by
     /// the old one.
     pub fn hello_key_fields(&self) -> serde_json::Value {
-        let url = my_id(&self.cfg);
+        self.hello_key_fields_at(&my_id(&self.cfg))
+    }
+
+    /// [`Self::hello_key_fields`] for the address `url` the hello names.
+    pub fn hello_key_fields_at(&self, url: &str) -> serde_json::Value {
         let key = self.node_pub();
         let sig = hex::encode(self.key.sign(format!("aqua-fed-hello\n{url}\n{key}").as_bytes()));
-        serde_json::json!({ "node_key": key, "node_sig": sig, "rotated": self.cfg.rotated, "admit": self.cfg.join_token, "vouches": self.cfg.vouches })
+        serde_json::json!({ "node_key": key, "node_sig": sig, "rotated": self.cfg.rotated, "rotations": self.cfg.rotations, "admit": self.cfg.join_token, "vouches": self.cfg.vouches })
     }
 
     /// A vouch by this relay for node `id` at `url`.
@@ -629,6 +897,12 @@ impl Fed {
     }
 
     pub fn verify(&self, headers: &HeaderMap, method: &str, path: &str, body: &[u8]) -> bool {
+        self.verify_from(headers, method, path, body).is_some()
+    }
+
+    /// [`Self::verify`], saying who signed: a relay by its pinned node key,
+    /// or anyone holding the shared secret.
+    pub fn verify_from(&self, headers: &HeaderMap, method: &str, path: &str, body: &[u8]) -> Option<Sender> {
         // A relay whose key we know signs with it (AQUA-SEC-009).
         // A sender we don't know yet (it learnt our key first) falls back to
         // the shared secret below, like a relay without keys; a known
@@ -636,62 +910,103 @@ impl Fed {
         if let Some(h2) = headers.get("x-aqua-fed2").and_then(|v| v.to_str().ok()) {
             let from = h2.split('.').nth(2).unwrap_or("");
             if self.is_revoked(from) {
-                return false;
+                return None;
             }
             if self.cfg.pins.iter().any(|p| p.id == from) {
-                return self.verify2(h2, method, path, body).is_some();
+                let from = self.verify2(h2, method, path, body)?;
+                // A solo relay (names only) reads and announces names, nothing else.
+                let base = path.split('?').next().unwrap_or(path);
+                if self.cfg.pins.iter().find(|p| p.id == from).is_some_and(Pin::names_only)
+                    && !matches!(base, "/v1/fed/names" | "/v1/fed/names/hello" | "/v1/fed/ping")
+                {
+                    tracing::warn!(%path, "federation: a relay of the name registry asked for more than names — refused");
+                    return None;
+                }
+                // The `x-aqua-fed` sent next to it is used up too: otherwise
+                // the same request, with `x-aqua-fed2` cut off, passed again
+                // on the shared secret wherever that is still taken.
+                if let Some((ts, sig)) = self.secret_sig(headers, method, path, body) {
+                    if !self.replay.take(&from, &sig, ts, now_ms()) {
+                        return None;
+                    }
+                }
+                return Some(Sender::Node(from));
             }
         }
         // Only the shared secret: fine while we don't know every peer's key
         // (older relays), and always for introducing oneself.
         let base = path.split('?').next().unwrap_or(path);
-        let intro = matches!(base, "/v1/fed/hello" | "/v1/fed/ping" | "/v1/fed/names" | "/v1/fed/names/hello");
-        if self.strict() && !intro {
-            tracing::warn!(%path, "federation: a request signed only with the shared secret — refused (every peer has a key)");
-            return false;
+        // Introductions only: a hello queues an unknown relay for the admin.
+        let intro = matches!(base, "/v1/fed/hello" | "/v1/fed/ping" | "/v1/fed/names/hello");
+        if self.enforced() && !intro {
+            tracing::warn!(%path, "federation: a request signed only with the shared secret — refused (node keys are required)");
+            return None;
         }
-        let Some(h) = headers.get("x-aqua-fed").and_then(|v| v.to_str().ok()) else { return false };
-        let Some((ts, sig)) = h.split_once('.') else { return false };
-        let Ok(ts) = ts.parse::<i64>() else { return false };
-        if (now_ms() - ts).abs() > SKEW_MS {
-            return false;
-        }
-        let want = mac(&self.cfg.secret, method, path, ts, body);
-        if !bool::from(subtle::ConstantTimeEq::ct_eq(want.as_bytes(), sig.as_bytes())) {
-            return false;
-        }
+        let (ts, sig) = self.secret_sig(headers, method, path, body)?;
         // AQUA-SEC-009: a signed request was good for its whole ±5-minute
         // window, as many times as anyone sent it again. Each signature is
         // now taken once (signatures cover the time, so a retry signs anew).
-        self.replay.take(sig, ts, now_ms())
+        self.replay.take("secret", &sig, ts, now_ms()).then_some(Sender::Secret)
+    }
+
+    /// A good `x-aqua-fed` (shared-secret) signature of this request, fresh:
+    /// its time and signature. Not used up here.
+    fn secret_sig(&self, headers: &HeaderMap, method: &str, path: &str, body: &[u8]) -> Option<(i64, String)> {
+        let h = headers.get("x-aqua-fed").and_then(|v| v.to_str().ok())?;
+        let (ts, sig) = h.split_once('.')?;
+        let ts = ts.parse::<i64>().ok()?;
+        if (now_ms() - ts).abs() > SKEW_MS {
+            return None;
+        }
+        let want = mac(&self.cfg.secret, method, path, ts, body);
+        bool::from(subtle::ConstantTimeEq::ct_eq(want.as_bytes(), sig.as_bytes())).then(|| (ts, sig.to_string()))
+    }
+
+    /// May `sender` speak for the relay known as `id` (its reverse link,
+    /// dropping its old address)? Only the relay whose key is pinned for
+    /// `id`; anyone with the secret only while no key is pinned there and
+    /// the network isn't on keys yet.
+    pub fn speaks_for(&self, sender: &Sender, id: &str) -> bool {
+        match self.pin_for(id) {
+            Some(p) => matches!(sender, Sender::Node(n) if *n == p.id),
+            None => !self.enforced(),
+        }
     }
 
     /// Is `peer` a relay we still talk to (1.2.0 or newer)? Asked once in a
     /// while (`/v1/stats` says its version; older relays don't say).
     async fn modern(&self, peer: &str) -> bool {
+        self.peer_version(peer).await.is_some()
+    }
+
+    /// The version `peer` says it runs, when it is one we still talk to
+    /// (1.2.0 or newer). Asked once in a while (`/v1/stats`; older relays
+    /// don't say). A relay known only by its reverse link: None.
+    pub(crate) async fn peer_version(&self, peer: &str) -> Option<String> {
         if peer.starts_with("tunnel:") {
-            return false;
+            return None;
         }
-        static SEEN: std::sync::Mutex<Option<std::collections::HashMap<String, (std::time::Instant, bool)>>> = std::sync::Mutex::new(None);
-        if let Some((at, ok)) = SEEN.lock().ok().and_then(|m| m.as_ref().and_then(|m| m.get(peer).copied())) {
-            if at.elapsed() < Duration::from_secs(if ok { 600 } else { 120 }) {
-                return ok;
+        type Seen = std::collections::HashMap<String, (std::time::Instant, Option<String>)>;
+        static SEEN: std::sync::Mutex<Option<Seen>> = std::sync::Mutex::new(None);
+        if let Some((at, v)) = SEEN.lock().ok().and_then(|m| m.as_ref().and_then(|m| m.get(peer).cloned())) {
+            if at.elapsed() < Duration::from_secs(if v.is_some() { 600 } else { 120 }) {
+                return v;
             }
         }
-        let ok = match self.http.get(format!("{peer}/v1/stats")).timeout(Duration::from_secs(5)).send().await {
+        let v = match self.http.get(format!("{peer}/v1/stats")).timeout(Duration::from_secs(5)).send().await {
             Ok(r) => r.json::<serde_json::Value>().await.ok()
-                .and_then(|v| v["version"].as_str().map(crate::relay_version_ok))
-                .unwrap_or(false),
+                .and_then(|v| v["version"].as_str().map(str::to_string))
+                .filter(|v| crate::relay_version_ok(v)),
             // Unreachable now: don't decide for 10 minutes on that.
-            Err(_) => { mark_down(peer); return false }
+            Err(_) => { mark_down(peer); return None }
         };
-        if !ok {
+        if v.is_none() {
             tracing::warn!(%peer, "federation: this relay is older than {} — not talking to it", crate::MIN_RELAY);
         }
         if let Ok(mut m) = SEEN.lock() {
-            m.get_or_insert_with(std::collections::HashMap::new).insert(peer.to_string(), (std::time::Instant::now(), ok));
+            m.get_or_insert_with(std::collections::HashMap::new).insert(peer.to_string(), (std::time::Instant::now(), v.clone()));
         }
-        ok
+        v
     }
 
     async fn get(&self, peer: &str, path: &str) -> Option<reqwest::Response> {
@@ -786,6 +1101,7 @@ impl Fed {
                 let r = self.post(p, "/v1/fed/hello", body).await?;
                 let v: serde_json::Value = r.json().await.ok()?;
                 self.note_vouch(&v);
+                self.note_answer_key(p, &v);
                 let mut out: Vec<String> = v["peers"].as_array()?.iter().filter_map(|x| x.as_str().map(str::to_string)).collect();
                 if let Some(s) = v["self"].as_str() { out.push(s.to_string()); }
                 Some(out)
@@ -803,8 +1119,38 @@ impl Fed {
         let mut hello = serde_json::json!({ "url": my_id(&self.cfg), "peers": self.cfg.peers });
         if let (Some(o), serde_json::Value::Object(k)) = (hello.as_object_mut(), self.hello_key_fields()) { o.extend(k); }
         if let Some(r) = self.post(peer, "/v1/fed/hello", serde_json::to_vec(&hello).unwrap_or_default()).await {
-            if let Ok(v) = r.json::<serde_json::Value>().await { self.note_vouch(&v); }
+            if let Ok(v) = r.json::<serde_json::Value>().await { self.note_vouch(&v); self.note_answer_key(peer, &v); }
         }
+    }
+
+    /// A hello answer carries the answering relay's key, signed by it over
+    /// its address. Kept when that address is the one we asked (we reached
+    /// it there ourselves) and the key may be pinned (`pin_change`): a
+    /// relay behind a router learns the key of the public one it polls
+    /// without waiting for a hello back over its reverse link.
+    fn note_answer_key(&self, peer: &str, v: &serde_json::Value) {
+        let peer = peer.trim_end_matches('/');
+        if v["self"].as_str().map(|s| s.trim_end_matches('/')) != Some(peer) || !peer.starts_with("http") {
+            return;
+        }
+        let h = Hello {
+            url: peer.to_string(),
+            admit: String::new(),
+            vouches: Vec::new(),
+            peers: Vec::new(),
+            node_key: v["node_key"].as_str().unwrap_or("").to_string(),
+            node_sig: v["node_sig"].as_str().unwrap_or("").to_string(),
+            rotated: v["rotated"].as_str().unwrap_or("").to_string(),
+            rotations: serde_json::from_value(v["rotations"].clone()).unwrap_or_default(),
+        };
+        // Only a peer on our own list, under a key we take: a first key or
+        // a signed change. Another key without a signature isn't taken here.
+        let pin = match pin_change(self, &h) {
+            Some(PinChange::New(p)) if self.cfg.peers.iter().any(|u| u == peer) => p,
+            Some(PinChange::Rotated(p, ..)) => p,
+            _ => return,
+        };
+        if let Ok(mut g) = self.got_pins.lock() { g.push(pin); }
     }
 
     /// A hello answer may carry a vouch for us (we were admitted).
@@ -984,9 +1330,9 @@ fn my_url(cfg: &FedConfig) -> String {
 /// `GET /v1/fed/names?since=T` — the name registry (see
 /// [`crate::directory::Directory::names_since`]).
 pub async fn h_names(State(state): State<AppState>, headers: HeaderMap, uri: axum::http::Uri, Query(q): Query<Since>) -> Result<impl IntoResponse, StatusCode> {
-    let fed = check_registry(&state, &headers, "GET", signed_path(&uri), b"")
-        .or_else(|_| check_registry(&state, &headers, "GET", &format!("/v1/fed/names?since={}", q.since), b""))
-        .or_else(|_| check_registry(&state, &headers, "GET", "/v1/fed/names", b""))?;
+    // Only the path as signed: the other spellings tried before (no query,
+    // `since` alone) let one signature stand for any page.
+    let fed = check_registry(&state, &headers, "GET", signed_path(&uri), b"")?;
     let dir = state.directory.clone();
     let names = tokio::task::spawn_blocking(move || dir.names_after(q.since, q.after.as_deref(), 1000)).await.unwrap_or_default();
     Ok(Json(serde_json::json!({ "home": my_url(&fed.cfg), "mode": if fed.cfg.active() { "network" } else { "solo" }, "names": names })))
@@ -998,26 +1344,51 @@ pub async fn h_names_hello(State(state): State<AppState>, headers: HeaderMap, bo
     let fed = check_registry(&state, &headers, "POST", "/v1/fed/names/hello", &body)?;
     let v: serde_json::Value = serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
     let url = v["url"].as_str().unwrap_or("").trim().trim_end_matches('/').to_string();
-    if fed.cfg.active() && url.starts_with("http") && url != my_url(&fed.cfg) && !fed.cfg.solo_peers.contains(&url) && fed.cfg.solo_peers.len() < 256 {
-        let mut c = fed.cfg.clone();
-        c.solo_peers.push(url.clone());
-        if c.ephemeral || c.save().is_ok() {
-            if let Ok(mut g) = state.fed.write() { *g = Fed::new(c); }
-            tracing::info!(%url, "name registry: a solo relay joined");
+    let k = fed.hello_key_fields();
+    let answer = |fed: &Fed| Json(serde_json::json!({ "self": my_url(&fed.cfg), "peers": fed.cfg.peers,
+        "node_key": k["node_key"], "node_sig": k["node_sig"], "rotated": k["rotated"], "rotations": k["rotations"] }));
+    // A solo relay brings its node key (1.21.0-25): pinned as "names", like a
+    // hello pins a relay of the network. Once keys are required, a solo
+    // relay we don't know joins only with an invitation token or a vouch —
+    // otherwise it waits for the admin; without a key it isn't taken at all.
+    if fed.cfg.active() && url.starts_with("http") && url != my_url(&fed.cfg) {
+        let h: Option<Hello> = serde_json::from_value(v.clone()).ok();
+        let admitted = match &h {
+            Some(h) => decide_pin(&state, &fed, h, true).await.0,
+            None => !fed.enforced() || fed.pin_for(&url).is_some(),
+        };
+        if !admitted {
+            return Ok(Json(serde_json::json!({ "pending": true, "self": my_url(&fed.cfg) })));
         }
     }
-    Ok(Json(serde_json::json!({ "self": my_url(&fed.cfg), "peers": fed.cfg.peers })))
+    let joined = update_cfg(&state, |_, c| {
+        if !(c.active() && url.starts_with("http") && url != my_url(c) && !c.solo_peers.contains(&url) && c.solo_peers.len() < 256) {
+            return false;
+        }
+        c.solo_peers.push(url.clone());
+        true
+    });
+    if joined.is_some() {
+        tracing::info!(%url, "name registry: a solo relay joined");
+    }
+    let fed = registry(&state).ok_or(StatusCode::NOT_FOUND)?;
+    Ok(answer(&fed))
 }
 
 /// A solo relay: say hello to the network for the name registry. Returns
 /// the relays it told us about that we didn't know.
 pub async fn names_hello(fed: &Fed) -> Vec<String> {
     let me = my_url(&fed.cfg);
-    let body = serde_json::to_vec(&serde_json::json!({ "url": me })).unwrap_or_default();
+    // Its key too (1.21.0-25): the network pins it as a relay of the names
+    // registry, and it pins theirs from the answers.
+    let mut hello = serde_json::json!({ "url": me });
+    if let (Some(o), serde_json::Value::Object(k)) = (hello.as_object_mut(), fed.hello_key_fields_at(&me)) { o.extend(k); }
+    let body = serde_json::to_vec(&hello).unwrap_or_default();
     let mut known = Vec::new();
     for p in &fed.cfg.peers {
         if let Some(r) = fed.post(p, "/v1/fed/names/hello", body.clone()).await {
             if let Ok(v) = r.json::<serde_json::Value>().await {
+                fed.note_answer_key(p, &v);
                 for x in v["peers"].as_array().into_iter().flatten().chain(std::iter::once(&v["self"])) {
                     if let Some(u) = x.as_str() { known.push(u.trim_end_matches('/').to_string()); }
                 }
@@ -1036,7 +1407,6 @@ pub async fn names_hello(fed: &Fed) -> Vec<String> {
 /// skipped or read twice. Relays before 1.21.0-23 ignore `after` and answer
 /// `updated_at > since`: with them it works as before.
 pub type Cursor = (i64, String);
-type CursorMap = std::collections::HashMap<String, Cursor>;
 
 /// `?since=T&after=KEY` (the key percent-encoded; empty key: no `after`).
 fn cursor_query(c: &Cursor) -> String {
@@ -1056,9 +1426,9 @@ fn signed_path(uri: &axum::http::Uri) -> &str {
 }
 
 /// Pull the name registry from one relay (paged).
-async fn sync_names(state: &AppState, fed: &Fed, peer: &str, since: &mut CursorMap) {
+async fn sync_names(state: &AppState, fed: &Fed, peer: &str) {
     for _ in 0..50 {
-        let from = since.get(peer).cloned().unwrap_or_default();
+        let from = cursor(state, peer, "names");
         let Some(r) = fed.get(peer, &format!("/v1/fed/names?{}", cursor_query(&from))).await else { return };
         let Ok(v) = r.json::<serde_json::Value>().await else { return };
         let home = v["home"].as_str().unwrap_or(peer).trim_end_matches('/').to_string();
@@ -1067,43 +1437,76 @@ async fn sync_names(state: &AppState, fed: &Fed, peer: &str, since: &mut CursorM
         let n = rows.len();
         let last = rows.last().map(|r| (r.updated_at, r.username.clone())).unwrap_or(from);
         let dir = state.directory.clone();
-        let moved = tokio::task::spawn_blocking(move || rows.iter().filter_map(|r| dir.fed_apply_name(r, &home)).collect::<Vec<_>>()).await.unwrap_or_default();
+        let Ok(moved) = tokio::task::spawn_blocking(move || rows.iter().filter_map(|r| dir.fed_apply_name(r, &home)).collect::<Vec<_>>()).await else { return };
         for (old, new) in &moved {
             crate::move_live(state, old, new);
         }
-        since.insert(peer.to_string(), last);
+        if !keep_cursor(state, peer, "names", &last) { return; }
         if n < 1000 { return; }
     }
 }
 
-/// `check` for other modules (fedtunnel.rs).
-pub fn check_pub(state: &AppState, headers: &HeaderMap, method: &str, path: &str, body: &[u8]) -> Result<Arc<Fed>, StatusCode> {
-    check(state, headers, method, path, body)
+/// `check` for other modules (fedtunnel.rs), with who signed.
+pub fn check_pub(state: &AppState, headers: &HeaderMap, method: &str, path: &str, body: &[u8]) -> Result<(Arc<Fed>, Sender), StatusCode> {
+    check_from(state, headers, method, path, body)
 }
 
 fn check(state: &AppState, headers: &HeaderMap, method: &str, path: &str, body: &[u8]) -> Result<Arc<Fed>, StatusCode> {
+    check_from(state, headers, method, path, body).map(|(f, _)| f)
+}
+
+/// A request of a relay of this network: the network and who signed it.
+fn check_from(state: &AppState, headers: &HeaderMap, method: &str, path: &str, body: &[u8]) -> Result<(Arc<Fed>, Sender), StatusCode> {
     let fed = current(state).ok_or(StatusCode::NOT_FOUND)?;
-    if !fed.verify(headers, method, path, body) {
+    let Some(sender) = fed.verify_from(headers, method, path, body) else {
         return Err(StatusCode::UNAUTHORIZED);
-    }
+    };
     // Relays older than 1.2.0 don't know two-step codes: an account copied
     // there could be signed into without one. They're not served.
     if !crate::caller_version(headers, None).as_deref().is_some_and(crate::relay_version_ok) {
         return Err(StatusCode::UPGRADE_REQUIRED);
     }
-    Ok(fed)
+    Ok((fed, sender))
 }
 
 // ------------------------------------------------------------------ handlers
 
 /// A peer asks: is this user connected here? Deliver if so (never queue).
 pub async fn h_deliver(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Result<Json<serde_json::Value>, StatusCode> {
-    check(&state, &headers, "POST", "/v1/fed/deliver", &body)?;
+    let (_, sender) = check_from(&state, &headers, "POST", "/v1/fed/deliver", &body)?;
     let msg: RelayMessage = serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    // A8: the sender must be an account of the network we know (not banned,
+    // not deleted, not a bot of another relay posing as a person), and a
+    // relay can hand over only so many a minute. This narrows what a relay
+    // can make up; it doesn't prove who wrote the envelope (that's the
+    // end-to-end encryption's job on the devices).
+    if !per_node_ok(&sender, "deliver", 6000) {
+        return Err(StatusCode::TOO_MANY_REQUESTS);
+    }
+    let from = crate::base_user(&msg.from).to_string();
+    let known = { let d = state.directory.clone(); tokio::task::spawn_blocking(move || d.may_send_from_peer(&from)).await.unwrap_or(false) };
+    if !known {
+        tracing::warn!(from = %msg.from, "federation: an envelope from someone not known here — refused");
+        return Err(StatusCode::FORBIDDEN);
+    }
     crate::journal::visitor(crate::base_user(&msg.from), "user");
     // A bot of this relay: its queue (a user of another relay wrote to it).
     let delivered = crate::deliver_to_bot(&state, &msg).await || crate::deliver_local(&state, &msg).await;
     Ok(Json(serde_json::json!({ "delivered": delivered })))
+}
+
+/// At most `per_min` calls of `what` a minute from one sender (a node id;
+/// everyone with the secret only shares one count).
+fn per_node_ok(sender: &Sender, what: &str, per_min: u32) -> bool {
+    type Counts = std::collections::HashMap<String, (std::time::Instant, u32)>;
+    static C: std::sync::OnceLock<std::sync::Mutex<Counts>> = std::sync::OnceLock::new();
+    let key = match sender { Sender::Node(n) => format!("{what} {n}"), Sender::Secret => format!("{what} secret") };
+    let mut g = C.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    if g.len() > 4096 { g.retain(|_, (t, _)| t.elapsed() < Duration::from_secs(60)); }
+    let e = g.entry(key).or_insert((std::time::Instant::now(), 0));
+    if e.0.elapsed() >= Duration::from_secs(60) { *e = (std::time::Instant::now(), 0); }
+    e.1 += 1;
+    e.1 <= per_min
 }
 
 /// A peer changed something: pull from the peers now instead of in ≤ 30 s.
@@ -1342,6 +1745,8 @@ pub struct Hello {
     #[serde(default)] node_key: String,
     #[serde(default)] node_sig: String,
     #[serde(default)] rotated: String,
+    /// Its last key changes (1.21.0-25).
+    #[serde(default)] rotations: Vec<RotStep>,
 }
 
 /// A relay of the network says hello: it's added to our peers if new, and
@@ -1350,6 +1755,13 @@ pub struct Hello {
 pub async fn h_hist_list(State(state): State<AppState>, headers: HeaderMap, uri: axum::http::Uri, Query(q): Query<Since>) -> Result<impl IntoResponse, StatusCode> {
     check(&state, &headers, "GET", signed_path(&uri), b"")?;
     Ok(Json(state.directory.fed_hist_after(q.since, q.after.as_deref())))
+}
+
+/// `GET /v1/fed/tombs?since&after` — accounts deleted (A7): ours and those
+/// handed on to us, each signed by the relay that deleted it.
+pub async fn h_tombs(State(state): State<AppState>, headers: HeaderMap, uri: axum::http::Uri, Query(q): Query<Since>) -> Result<impl IntoResponse, StatusCode> {
+    check(&state, &headers, "GET", signed_path(&uri), b"")?;
+    Ok(Json(state.directory.tombs_after(q.since, q.after.as_deref(), 500)))
 }
 
 pub async fn h_hist_get(State(state): State<AppState>, headers: HeaderMap, Path((user, k)): Path<(String, String)>) -> Result<impl IntoResponse, StatusCode> {
@@ -1364,35 +1776,16 @@ pub async fn h_hello(State(state): State<AppState>, headers: HeaderMap, body: By
     // REV2-004: once every peer's key is known, a relay we don't know yet
     // joins only with an invitation's admission token, or vouched for by a
     // relay of the network — otherwise it waits for the admin.
-    let strict = fed.strict();
+    let strict = fed.enforced();
     let mut vouch = None;
-    let new_pin = pin_from_hello(&fed, &h);
     let known = fed.pin_for(&h.url).is_some();
-    let mut admitted = !strict || known;
-    if let Some(pin) = new_pin {
-        if !known && strict {
-            if take_admit_token(&state, &h.admit) {
-                tracing::info!(url = %pin.url, "federation: a relay joined with an invitation token");
-                admitted = true;
-            } else if fed.vouched(&pin, &h.vouches) {
-                tracing::info!(url = %pin.url, "federation: a relay joined, vouched for by a relay of the network");
-                admitted = true;
-            } else {
-                tracing::warn!(url = %pin.url, id = %pin.id, "federation: a relay that isn't admitted said hello — waiting for the admin");
-                add_pending(&state, pin.clone());
-            }
-        } else {
-            admitted = true;
-        }
-        if admitted {
-            if strict && !known { vouch = Some(fed.vouch_for(&pin.id, &pin.url)); }
+    let (admitted, pinned) = decide_pin(&state, &fed, &h, false).await;
+    if let Some(pin) = &pinned {
+        if strict && !known { vouch = Some(fed.vouch_for(&pin.id, &pin.url)); }
+        // It now knows... not yet our key: tell it, so it can sign too.
+        if let Some(f) = current(&state) {
             let url = pin.url.clone();
-            if set_pin(&state, pin) {
-                // It now knows... not yet our key: tell it, so it can sign too.
-                if let Some(f) = current(&state) {
-                    tokio::spawn(async move { f.hello_to(&url).await; });
-                }
-            }
+            tokio::spawn(async move { f.hello_to(&url).await; });
         }
     }
     if !admitted {
@@ -1413,24 +1806,99 @@ pub async fn h_hello(State(state): State<AppState>, headers: HeaderMap, body: By
         }
         if !add_peers(&st, &ok).is_empty() { st.fed_kick.notify_one(); }
     });
-    Ok(Json(serde_json::json!({ "self": my_id(&fed.cfg), "peers": fed.cfg.peers, "vouch": vouch })))
+    let k = fed.hello_key_fields();
+    Ok(Json(serde_json::json!({ "self": my_id(&fed.cfg), "peers": fed.cfg.peers, "vouch": vouch,
+        "node_key": k["node_key"], "node_sig": k["node_sig"], "rotated": k["rotated"], "rotations": k["rotations"] })))
+}
+
+/// What to do with the key a hello (or names hello) brings. Returns whether
+/// the sender may go on (`false`: it waits for the admin) and the pin kept.
+///
+/// * a first key: an invitation token or a vouch admits it; without them,
+///   during the transition, only an address on our own list
+///   (`names`: always, as before keys) — `tunnel:` ones never by themselves;
+///   an `http` address must prove it holds the key (`proves_address`);
+/// * a signed key change is followed; another key without one waits for the
+///   admin as a conflict, unless it comes with a fresh invitation token (a
+///   relay that lost its key, re-invited);
+/// * a pinned key at a new address moves there once it proves it.
+async fn decide_pin(state: &AppState, fed: &Fed, h: &Hello, names: bool) -> (bool, Option<Pin>) {
+    let enforced = fed.enforced();
+    let known = fed.pin_for(&h.url).is_some();
+    let Some(ch) = pin_change(fed, h) else { return (!enforced || known, None) };
+    let ch = match ch {
+        PinChange::New(p) if names => PinChange::New(Pin { role: "names".into(), ..p }),
+        other => other,
+    };
+    let token_ok = |st: &AppState| take_admit_token(st, &h.admit);
+    match &ch {
+        PinChange::Rotated(p, ..) => {
+            let p = p.clone();
+            let changed = apply_pin_change(state, &ch);
+            (true, changed.then_some(p))
+        }
+        PinChange::Moved { pin, .. } => {
+            if fed.proves_address(&pin.url, pin).await && apply_pin_change(state, &ch) {
+                (true, Some(pin.clone()))
+            } else {
+                (!enforced, None)
+            }
+        }
+        PinChange::Conflict(pin) => {
+            // A fresh invitation token stands for the admin: the relay lost
+            // its key and was invited again.
+            if (!pin.url.starts_with("http") || fed.proves_address(&pin.url, pin).await) && token_ok(state) {
+                tracing::warn!(url = %pin.url, "federation: a relay's key replaced with an invitation token (it lost the old one)");
+                apply_pin_change(state, &ch);
+                (true, Some(pin.clone()))
+            } else {
+                add_pending(state, pin.clone());
+                (false, None)
+            }
+        }
+        PinChange::New(pin) => {
+            let on_list = if names { fed.cfg.solo_peers.contains(&pin.url) || !enforced } else { fed.cfg.peers.contains(&pin.url) };
+            let ok = if pin.url.starts_with("http") {
+                let by_us = !enforced && on_list;
+                // The address first: a relay that can't prove it doesn't use up the token.
+                fed.proves_address(&pin.url, pin).await && (by_us || fed.vouched(pin, &h.vouches) || token_ok(state))
+            } else {
+                token_ok(state) || fed.vouched(pin, &h.vouches)
+            };
+            if ok && apply_pin_change(state, &ch) {
+                tracing::info!(url = %pin.url, names, "federation: a relay's key pinned");
+                (true, Some(pin.clone()))
+            } else if enforced {
+                tracing::warn!(url = %pin.url, id = %pin.id, "federation: a relay that isn't admitted said hello — waiting for the admin");
+                add_pending(state, pin.clone());
+                (false, None)
+            } else {
+                (true, None)
+            }
+        }
+    }
 }
 
 /// Keep vouches our hellos got back, and drop the invitation token once a
 /// relay of the network has admitted us (REV2-004).
 pub fn absorb_vouches(state: &AppState) {
     let Some(cur) = registry(state) else { return };
+    // Both taken from this config before it is replaced below.
+    let pins: Vec<Pin> = cur.got_pins.lock().map(|mut g| std::mem::take(&mut *g)).unwrap_or_default();
     let got: Vec<Vouch> = cur.got_vouches.lock().map(|mut g| std::mem::take(&mut *g)).unwrap_or_default();
+    for pin in pins {
+        if set_pin(state, pin) {
+            tracing::info!("federation: a peer's key pinned from its hello answer");
+        }
+    }
     if got.is_empty() { return; }
-    let mut c = cur.cfg.clone();
-    for v in got {
-        if !c.vouches.iter().any(|x| x.by == v.by) && c.vouches.len() < 64 { c.vouches.push(v); }
-    }
-    c.join_token.clear();
-    if c.ephemeral || c.save().is_ok() {
-        let next = Fed::new(c);
-        if let Ok(mut g) = state.fed.write() { *g = next; }
-    }
+    update_cfg(state, |_, c| {
+        for v in got {
+            if !c.vouches.iter().any(|x| x.by == v.by) && c.vouches.len() < 64 { c.vouches.push(v); }
+        }
+        c.join_token.clear();
+        true
+    });
 }
 
 /// Use up an admission token (REV2-004). True when it was one of ours and
@@ -1438,73 +1906,92 @@ pub fn absorb_vouches(state: &AppState) {
 fn take_admit_token(state: &AppState, token: &str) -> bool {
     let token = token.trim();
     if token.len() < 32 { return false; }
-    let Some(cur) = registry(state) else { return false };
     let h = hex::encode(Sha256::digest(token.as_bytes()));
     let now = now_secs();
-    let mut c = cur.cfg.clone();
-    let before = c.admit_tokens.len();
-    let hit = c.admit_tokens.iter().any(|(t, exp)| subtle::ConstantTimeEq::ct_eq(t.as_bytes(), h.as_bytes()).into() && *exp > now);
-    c.admit_tokens.retain(|(t, exp)| *t != h && *exp > now);
-    if (hit || c.admit_tokens.len() != before) && (c.ephemeral || c.save().is_ok()) {
-        let next = Fed::new(c);
-        if let Ok(mut g) = state.fed.write() { *g = next; }
-    }
-    hit
+    let mut hit = false;
+    // Under the lock: two hellos with the same token can't both use it.
+    let saved = update_cfg(state, |_, c| {
+        let before = c.admit_tokens.len();
+        hit = c.admit_tokens.iter().any(|(t, exp)| subtle::ConstantTimeEq::ct_eq(t.as_bytes(), h.as_bytes()).into() && *exp > now);
+        c.admit_tokens.retain(|(t, exp)| *t != h && *exp > now);
+        hit || c.admit_tokens.len() != before
+    });
+    // Not saved: not used up either, so it isn't taken.
+    hit && saved.is_some()
 }
 
 /// A new one-time admission token for an invitation (kept as a hash).
 pub fn new_admit_token(state: &AppState) -> Option<String> {
-    let cur = registry(state)?;
     let mut b = [0u8; 32];
     rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut b);
     let token = hex::encode(b);
-    let mut c = cur.cfg.clone();
     let now = now_secs();
-    c.admit_tokens.retain(|(_, exp)| *exp > now);
-    c.admit_tokens.push((hex::encode(Sha256::digest(token.as_bytes())), now + ADMIT_TTL_SECS));
-    if !(c.ephemeral || c.save().is_ok()) { return None; }
-    let next = Fed::new(c);
-    if let Ok(mut g) = state.fed.write() { *g = next; }
+    update_cfg(state, |_, c| {
+        c.admit_tokens.retain(|(_, exp)| *exp > now);
+        c.admit_tokens.push((hex::encode(Sha256::digest(token.as_bytes())), now + ADMIT_TTL_SECS));
+        true
+    })?;
     Some(token)
 }
 
 fn add_pending(state: &AppState, pin: Pin) {
-    let Some(cur) = registry(state) else { return };
-    let mut c = cur.cfg.clone();
-    if c.pending_nodes.iter().any(|p| p.id == pin.id) || c.pending_nodes.len() >= MAX_PENDING_NODES { return; }
-    c.pending_nodes.push(pin);
-    if c.ephemeral || c.save().is_ok() {
-        let next = Fed::new(c);
-        if let Ok(mut g) = state.fed.write() { *g = next; }
-    }
+    update_cfg(state, |_, c| {
+        if c.pending_nodes.iter().any(|p| p.id == pin.id && p.url == pin.url && p.conflict == pin.conflict) { return false; }
+        // Full: the oldest waiting one goes (one flood of hellos kept the
+        // list full and real relays out of it).
+        c.pending_nodes.retain(|p| p.id != pin.id);
+        while c.pending_nodes.len() >= MAX_PENDING_NODES { c.pending_nodes.remove(0); }
+        c.pending_nodes.push(pin);
+        true
+    });
 }
 
 /// Admin: admit a waiting relay by its node id. True when it was waiting.
 pub fn admit(state: &AppState, id: &str) -> bool {
-    let Some(cur) = registry(state) else { return false };
-    let mut c = cur.cfg.clone();
-    let Some(pos) = c.pending_nodes.iter().position(|p| p.id == id) else { return false };
-    let pin = c.pending_nodes.remove(pos);
-    c.revoked.retain(|r| r != id);
-    c.pins.retain(|p| p.url != pin.url);
-    if !c.peers.contains(&pin.url) && c.peers.len() < 64 { c.peers.push(pin.url.clone()); }
-    let url = pin.url.clone();
-    c.pins.push(pin);
-    if !(c.ephemeral || c.save().is_ok()) { return false; }
-    let next = Fed::new(c);
-    if let Ok(mut g) = state.fed.write() { *g = next.clone(); }
-    if let Some(f) = next {
-        tokio::spawn(async move { f.hello_to(&url).await; });
+    let mut admitted: Option<(String, bool)> = None;
+    let next = update_cfg(state, |_, c| {
+        let Some(pos) = c.pending_nodes.iter().position(|p| p.id == id) else { return false };
+        let pin = c.pending_nodes.remove(pos);
+        c.revoked.retain(|r| r != id);
+        c.pins.retain(|p| p.url != pin.url);
+        if pin.names_only() {
+            if !c.solo_peers.contains(&pin.url) && c.solo_peers.len() < 256 { c.solo_peers.push(pin.url.clone()); }
+        } else if !c.peers.contains(&pin.url) && c.peers.len() < 64 {
+            c.peers.push(pin.url.clone());
+        }
+        admitted = Some((pin.url.clone(), pin.names_only()));
+        c.pins.push(Pin { since: now_secs(), conflict: false, ..pin });
+        true
+    });
+    match (next, admitted) {
+        (Some(f), Some((url, false))) => { tokio::spawn(async move { f.hello_to(&url).await; }); true }
+        (Some(_), Some(_)) => true,
+        _ => false,
     }
-    true
 }
 
-/// The key a hello brings, when it may be kept (pinned):
+/// What a hello's key means for our pins.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PinChange {
+    /// A relay whose key (and address) we don't keep yet.
+    New(Pin),
+    /// A pinned relay changed its key, each step signed by the one before;
+    /// the ids it moved away from (to be retired) and their keys.
+    Rotated(Pin, Vec<String>, Vec<String>),
+    /// A pinned key at a new address (to be checked there before moving).
+    Moved { from: String, pin: Pin },
+    /// Another key for an address we keep a key for, not signed by it: for
+    /// the admin (or a fresh invitation token) to decide.
+    Conflict(Pin),
+}
+
+/// What the key a hello brings would change:
 /// * it must be signed by itself over the sender's address (possession);
-/// * a relay we know under another key moves only with that key's
-///   signature over the new one (`rotated`); otherwise it's refused;
-/// * revoked node ids never come back.
-fn pin_from_hello(fed: &Fed, h: &Hello) -> Option<Pin> {
+/// * a relay we know under another key moves only along key changes each
+///   signed by the key before (`rotations`; `rotated` of 1.21.0-23/24 for
+///   one step) — otherwise it's a conflict;
+/// * revoked and retired node ids never come back.
+fn pin_change(fed: &Fed, h: &Hello) -> Option<PinChange> {
     let url = h.url.trim().trim_end_matches('/').to_string();
     let key: [u8; 32] = hex::decode(h.node_key.trim()).ok()?.try_into().ok()?;
     let sig: [u8; 64] = hex::decode(h.node_sig.trim()).ok()?.try_into().ok()?;
@@ -1512,73 +1999,243 @@ fn pin_from_hello(fed: &Fed, h: &Hello) -> Option<Pin> {
     pubk.verify(format!("aqua-fed-hello\n{url}\n{}", hex::encode(key)).as_bytes(), &sig).ok()?;
     let id = node_id_of(&key);
     if fed.is_revoked(&id) {
-        tracing::warn!(%url, %id, "federation: hello from a revoked node key — ignored");
+        tracing::warn!(%url, %id, "federation: hello from a revoked or retired node key — ignored");
         return None;
     }
-    let pin = Pin { url: url.clone(), id, key: hex::encode(key) };
+    let pin = Pin { url: url.clone(), id: id.clone(), key: hex::encode(key), since: now_secs(), ..Default::default() };
     match fed.pin_for(&url) {
-        None => Some(pin),
         Some(old) if old.key == pin.key => None,
-        Some(old) => {
-            let ok = hex::decode(&old.key).ok().and_then(|b| <[u8; 32]>::try_from(b).ok()).zip(hex::decode(h.rotated.trim()).ok().and_then(|b| <[u8; 64]>::try_from(b).ok()))
-                .is_some_and(|(ok, rs)| aqua_core::crypto::SignPublic::from_bytes(ok).verify(format!("aqua-fed-rotate\n{}", pin.key).as_bytes(), &rs).is_ok());
-            if ok {
-                tracing::info!(%url, "federation: a peer changed its node key (signed by the old one)");
-                Some(pin)
-            } else {
-                tracing::warn!(%url, "federation: a hello with ANOTHER node key and no signature by the known one — ignored");
-                None
+        Some(old) => match follow_rotations(&url, old, &pin.key, &h.rotations, &h.rotated) {
+            Some((seq, retired, keys)) => {
+                tracing::info!(%url, seq, "federation: a peer changed its node key (signed by the old one)");
+                Some(PinChange::Rotated(Pin { role: old.role.clone(), rot_seq: seq, ..pin }, retired, keys))
             }
+            None => {
+                tracing::warn!(%url, "federation: a hello with ANOTHER node key and no signature by the known one — for the admin");
+                Some(PinChange::Conflict(Pin { role: old.role.clone(), conflict: true, ..pin }))
+            }
+        },
+        None => match fed.cfg.pins.iter().find(|p| p.id == id && p.url != url) {
+            Some(other) => Some(PinChange::Moved { from: other.url.clone(), pin: Pin { role: other.role.clone(), rot_seq: other.rot_seq, ..pin } }),
+            None => Some(PinChange::New(pin)),
+        },
+    }
+}
+
+/// From the key we keep (`old`) to `new` along signed key changes: the
+/// last step's number and the ids passed through. Steps must go up from the
+/// number we followed last; a chain may be at most [`MAX_ROTATIONS`] long.
+fn follow_rotations(url: &str, old: &Pin, new: &str, steps: &[RotStep], legacy: &str) -> Option<(u64, Vec<String>, Vec<String>)> {
+    let verify = |by: &str, msg: &str, sig: &str| -> bool {
+        let (Some(k), Some(s)) = (hex::decode(by).ok().and_then(|b| <[u8; 32]>::try_from(b).ok()), hex::decode(sig.trim()).ok().and_then(|b| <[u8; 64]>::try_from(b).ok())) else { return false };
+        aqua_core::crypto::SignPublic::from_bytes(k).verify(msg.as_bytes(), &s).is_ok()
+    };
+    let mut at = old.key.clone();
+    let mut seq = old.rot_seq;
+    let mut passed = Vec::new();
+    let mut keys = Vec::new();
+    for st in steps.iter().take(MAX_ROTATIONS) {
+        if st.old != at || st.seq <= seq {
+            continue;
+        }
+        let Some(old_id) = hex::decode(&at).ok().and_then(|b| <[u8; 32]>::try_from(b).ok()).map(|b| node_id_of(&b)) else { return None };
+        if !verify(&at, &rot_message(url, &old_id, &st.new, st.seq), &st.sig) {
+            return None;
+        }
+        passed.push(old_id);
+        keys.push(at.clone());
+        at = st.new.clone();
+        seq = st.seq;
+        if at == new {
+            return Some((seq, passed, keys));
+        }
+    }
+    // A relay of 1.21.0-23/24: one step, `aqua-fed-rotate\n{new}` by the old key.
+    if old.rot_seq == 0 && steps.is_empty() && verify(&old.key, &format!("aqua-fed-rotate\n{new}"), legacy) {
+        return Some((0, vec![old.id.clone()], vec![old.key.clone()]));
+    }
+    None
+}
+
+impl Fed {
+    /// Does the relay at `url` hold `pin`'s key? A ping there, signed for
+    /// that node id; the answer must be signed by that key over our request
+    /// (`sign_answers`). Whoever only has the secret can't answer for an
+    /// address that isn't theirs.
+    pub(crate) async fn proves_address(&self, url: &str, pin: &Pin) -> bool {
+        if !url.starts_with("http") {
+            return false;
+        }
+        let Some(key) = hex::decode(&pin.key).ok().and_then(|b| <[u8; 32]>::try_from(b).ok()) else { return false };
+        // A solo relay serves only the name registry.
+        let path = if pin.names_only() { "/v1/fed/names?since=0" } else { "/v1/fed/ping" };
+        let mut n = [0u8; 12];
+        rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut n);
+        let (nonce, ts, from) = (hex::encode(n), now_ms(), self.node_id());
+        let sig = self.key.sign(v2_message("GET", path, ts, &nonce, &from, &pin.id, b"").as_bytes());
+        let h2 = format!("{ts}.{nonce}.{from}.{}.{}", pin.id, hex::encode(sig));
+        let Ok(r) = self.http.get(format!("{url}{path}"))
+            .header("x-aqua-fed", self.header("GET", path, b""))
+            .header("x-aqua-fed2", h2.clone())
+            .timeout(Duration::from_secs(6))
+            .send().await else { return false };
+        let status = r.status();
+        let sig = r.headers().get("x-aqua-fed2-resp").and_then(|v| v.to_str().ok()).and_then(|s| hex::decode(s).ok()).and_then(|b| <[u8; 64]>::try_from(b).ok());
+        let Ok(body) = r.bytes().await else { return false };
+        status.is_success() && sig.is_some_and(|s| aqua_core::crypto::SignPublic::from_bytes(key).verify(resp_message(&h2, status.as_u16(), &body).as_bytes(), &s).is_ok())
+    }
+}
+
+/// Apply what a hello's key changes, once decided it may (`admit` paths in
+/// `h_hello` / `h_names_hello`). True when the pins changed.
+fn apply_pin_change(state: &AppState, ch: &PinChange) -> bool {
+    match ch {
+        PinChange::New(p) | PinChange::Conflict(p) => set_pin(state, Pin { conflict: false, ..p.clone() }),
+        PinChange::Rotated(p, retired, keys) => update_cfg(state, |_, c| {
+            c.pins.retain(|x| x.url != p.url);
+            c.pins.push(p.clone());
+            let now = now_secs();
+            for (r, k) in retired.iter().zip(keys) {
+                if !c.retired.contains(r) { c.retired.push(r.clone()); }
+                if !c.retired_keys.iter().any(|x| x.0 == *r) { c.retired_keys.push((r.clone(), k.clone(), now)); }
+            }
+            let extra = c.retired.len().saturating_sub(256);
+            c.retired.drain(..extra);
+            let extra = c.retired_keys.len().saturating_sub(256);
+            c.retired_keys.drain(..extra);
+            true
+        }).is_some(),
+        PinChange::Moved { from, pin } => {
+            let moved = update_cfg(state, |_, c| {
+                c.pins.retain(|x| x.url != *from && x.url != pin.url);
+                c.pins.push(pin.clone());
+                for list in [&mut c.peers, &mut c.solo_peers] {
+                    if let Some(i) = list.iter().position(|u| u == from) {
+                        if list.contains(&pin.url) { list.remove(i); } else { list[i] = pin.url.clone(); }
+                    }
+                }
+                true
+            }).is_some();
+            if moved {
+                tracing::info!(%from, to = %pin.url, "federation: a peer moved to a new address (same key, checked there)");
+                state.directory.fed_cursors_move(from, &pin.url);
+            }
+            moved
         }
     }
 }
 
 /// Keep `pin` (replacing the one for its address). True when it changed.
 pub fn set_pin(state: &AppState, pin: Pin) -> bool {
-    let Some(cur) = registry(state) else { return false };
-    let mut c = cur.cfg.clone();
-    if c.pins.iter().any(|p| *p == pin) { return false; }
-    c.pins.retain(|p| p.url != pin.url);
-    c.pins.push(pin);
-    if c.ephemeral || c.save().is_ok() {
-        let next = Fed::new(c);
-        if let Ok(mut g) = state.fed.write() { *g = next; }
-        return true;
-    }
-    false
+    update_cfg(state, |_, c| {
+        if c.pins.iter().any(|p| p.same(&pin)) { return false; }
+        c.pins.retain(|p| p.url != pin.url);
+        c.pins.push(pin);
+        true
+    }).is_some()
+}
+
+/// Put `new` in as the node key of `c` (now `cur`'s): the old key signs the
+/// change — for peers of 1.21.0-23/24 (`rotated`, one step) and as the next
+/// step of the chain for the rest.
+fn rotate_into(cur: &Fed, c: &mut FedConfig, new: &aqua_core::crypto::SignSecret) {
+    let new_pub = hex::encode(new.public().as_bytes());
+    c.rotated = hex::encode(cur.key.sign(format!("aqua-fed-rotate\n{new_pub}").as_bytes()));
+    let seq = c.rotations.last().map(|r| r.seq).unwrap_or(0) + 1;
+    let url = my_id(c);
+    let sig = hex::encode(cur.key.sign(rot_message(&url, &cur.node_id(), &new_pub, seq).as_bytes()));
+    c.rotations.push(RotStep { old: cur.node_pub(), new: new_pub, seq, sig });
+    let extra = c.rotations.len().saturating_sub(MAX_ROTATIONS);
+    c.rotations.drain(..extra);
+    c.node_key = hex::encode(new.to_bytes());
 }
 
 /// Admin: a new node key. The old one signs the new one; hellos carry that,
 /// so peers move their pins. Returns the new node id.
 pub async fn rotate_key(state: &AppState) -> Option<String> {
-    let cur = registry(state)?;
     let new = aqua_core::crypto::SignSecret::generate();
-    let new_pub = hex::encode(new.public().as_bytes());
-    let mut c = cur.cfg.clone();
-    c.rotated = hex::encode(cur.key.sign(format!("aqua-fed-rotate\n{new_pub}").as_bytes()));
-    c.node_key = hex::encode(new.to_bytes());
-    if !(c.ephemeral || c.save().is_ok()) { return None; }
-    let next = Fed::new(c)?;
+    let next = update_cfg(state, |cur, c| { rotate_into(cur, c, &new); true })?;
     let id = next.node_id();
-    if let Ok(mut g) = state.fed.write() { *g = Some(next.clone()); }
     for p in next.cfg.peers.clone() { next.hello_to(&p).await; }
     Some(id)
 }
 
+/// What the admin panel shows about the key requirement.
+pub fn auth_status(fed: &Fed) -> serde_json::Value {
+    let c = &fed.cfg;
+    let now = now_secs();
+    let unpinned: Vec<&String> = c.peers.iter().filter(|u| fed.pin_for(u).is_none()).collect();
+    let warn = c.auth_mode == "transition" && c.auth_deadline > now && c.auth_deadline - now <= AUTH_WARN_DAYS * DAY && !unpinned.is_empty();
+    serde_json::json!({
+        "mode": if fed.enforced() { "enforced" } else if c.auth_mode == "enforced" { "legacy" } else { "transition" },
+        "deadline": c.auth_deadline,
+        "enforced_at": c.enforced_at,
+        "legacy_until": c.legacy_until,
+        "env_enforced": env_enforced(),
+        "unpinned": unpinned,
+        "warn": warn,
+        "conflicts": c.pending_nodes.iter().filter(|p| p.conflict).map(|p| serde_json::json!({ "url": p.url, "id": p.id })).collect::<Vec<_>>(),
+        "legacy_max_days": LEGACY_MAX_DAYS,
+    })
+}
+
+/// Admin (`POST /v1/admin/fed/auth`): `enforce` — keys required now;
+/// `postpone {days ≤ 14}` — a later end of the transition (only during it);
+/// `legacy {days ≤ 7, confirm: true}` — let relays without keys in again for
+/// a while (ends by itself); `legacy_end`. Never anything that stays lax.
+pub fn set_auth(state: &AppState, action: &str, days: u64, confirm: bool) -> Result<serde_json::Value, &'static str> {
+    registry(state).ok_or("not in a network")?;
+    let now = now_secs();
+    let mut err = None;
+    let next = update_cfg(state, |_, c| {
+    c.settle(now);
+    let r: Result<(), &'static str> = (|| { match action {
+        "enforce" => {
+            if c.auth_mode != "enforced" {
+                c.auth_mode = "enforced".into();
+                c.enforced_at = now;
+            }
+        }
+        "postpone" => {
+            if c.auth_mode != "transition" || env_enforced() { return Err("keys are already required"); }
+            if !(1..=AUTH_TRANSITION_DAYS).contains(&days) { return Err("1 to 14 days"); }
+            // At most 14 days from now, whatever was set before.
+            c.auth_deadline = (c.auth_deadline.max(now) + days * DAY).min(now + AUTH_TRANSITION_DAYS * DAY);
+        }
+        "legacy" => {
+            if !confirm { return Err("confirm: true is required"); }
+            if env_enforced() { return Err("AQUA_FED_AUTH=enforced is set"); }
+            if c.auth_mode != "enforced" { return Err("keys aren't required yet"); }
+            if !(1..=LEGACY_MAX_DAYS).contains(&days) { return Err("1 to 7 days"); }
+            c.legacy_until = now + days * DAY;
+        }
+        "legacy_end" => c.legacy_until = 0,
+        _ => return Err("unknown action"),
+    } Ok(()) })();
+    match r { Ok(()) => true, Err(e) => { err = Some(e); false } }
+    });
+    if let Some(e) = err { return Err(e); }
+    let next = next.ok_or("can't save")?;
+    Ok(auth_status(&next))
+}
+
 /// Admin: never accept this node id again (and drop its pin and address).
 pub fn revoke(state: &AppState, id: &str) -> bool {
-    let Some(cur) = registry(state) else { return false };
-    let mut c = cur.cfg.clone();
-    let urls: Vec<String> = c.pins.iter().filter(|p| p.id == id).map(|p| p.url.clone()).collect();
-    c.pins.retain(|p| p.id != id);
-    c.peers.retain(|p| !urls.contains(p));
-    if !c.revoked.iter().any(|r| r == id) { c.revoked.push(id.to_string()); }
-    if c.ephemeral || c.save().is_ok() {
-        let next = Fed::new(c);
-        if let Ok(mut g) = state.fed.write() { *g = next; }
-        return true;
+    let mut urls: Vec<String> = Vec::new();
+    let done = update_cfg(state, |_, c| {
+        urls = c.pins.iter().filter(|p| p.id == id).map(|p| p.url.clone()).collect();
+        c.pins.retain(|p| p.id != id);
+        c.peers.retain(|p| !urls.contains(p));
+        c.solo_peers.retain(|p| !urls.contains(p));
+        c.pending_nodes.retain(|p| p.id != id);
+        if !c.revoked.iter().any(|r| r == id) { c.revoked.push(id.to_string()); }
+        true
+    }).is_some();
+    // Where sync was with it is of no use any more.
+    for u in &urls {
+        state.directory.fed_cursors_drop(Some(u), None);
     }
-    false
+    done
 }
 
 /// "Do you accept our signature?" — 204 for relays of the same network.
@@ -1637,9 +2294,8 @@ pub async fn h_peers(State(state): State<AppState>) -> Json<serde_json::Value> {
 pub fn spawn_sync(state: AppState) {
     let st = state.clone();
     tokio::spawn(async move {
-        let mut cursors = Cursors::default();
         loop {
-            sync_once(&st, &mut cursors).await;
+            sync_once(&st).await;
             tokio::select! {
                 _ = tokio::time::sleep(Duration::from_secs(30)) => {}
                 _ = st.fed_kick.notified() => {
@@ -1669,6 +2325,7 @@ pub fn spawn_announcer(state: AppState) {
                 if !add_peers(&st, &new).is_empty() { st.fed_kick.notify_one(); }
             } else if let Some(fed) = registry(&st) {
                 let new = names_hello(&fed).await;
+                absorb_vouches(&st);
                 if !add_peers(&st, &new).is_empty() { st.fed_kick.notify_one(); }
             }
             tokio::time::sleep(Duration::from_secs(180)).await;
@@ -1691,123 +2348,232 @@ pub fn spawn_announcer(state: AppState) {
     });
 }
 
-/// How far we've read from each peer.
-#[derive(Default)]
-pub struct Cursors {
-    users: CursorMap,
-    backups: CursorMap,
-    hist: CursorMap,
-    names: CursorMap,
+/// Where sync is in each peer's streams: kept in the database
+/// (`fed_cursors`, A6), so a restart goes on where it was instead of pulling
+/// everything again. A cursor moves only past rows that were taken in full
+/// (written, their media fetched); on any error it stays, and the row comes
+/// again next time.
+fn cursor(state: &AppState, peer: &str, stream: &str) -> Cursor {
+    state.directory.fed_cursor(peer, stream).unwrap_or_default()
 }
 
-pub async fn sync_once(state: &AppState, cursors: &mut Cursors) {
+/// Keep a cursor. False when it couldn't be written: the caller stops (it
+/// would go on from a place not on record).
+fn keep_cursor(state: &AppState, peer: &str, stream: &str, c: &Cursor) -> bool {
+    let ok = state.directory.set_fed_cursor(peer, stream, c.0, &c.1);
+    if !ok {
+        tracing::error!(%peer, %stream, "federation: where sync is can't be saved — stopping this round");
+    }
+    ok
+}
+
+/// Admin (`POST /v1/admin/fed/resync`): read a peer's streams (or all) from
+/// the start again — after restoring the database from a backup, say.
+pub fn resync(state: &AppState, peer: Option<&str>, stream: Option<&str>) {
+    state.directory.fed_cursors_drop(peer, stream);
+    state.fed_kick.notify_one();
+}
+
+/// Media of one account that failed to come this many times in a row is
+/// skipped (it may be gone on the peer), so one row can't stop sync for good.
+const MEDIA_TRIES: u32 = 3;
+
+fn media_failed(key: &str) -> u32 {
+    static F: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, u32>>> = std::sync::OnceLock::new();
+    let mut g = F.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    if g.len() > 10_000 { g.clear(); }
+    let n = g.entry(key.to_string()).or_default();
+    *n += 1;
+    *n
+}
+
+pub async fn sync_once(state: &AppState) {
     let Some(fed) = registry(state) else { return };
     if fed.cfg.active() {
         // Messages first: they're what people wait for.
         pull_for_connected(state, &fed).await;
         for peer in fed.cfg.peers.clone() {
-            sync_peer(state, &fed, &peer, &mut cursors.users, &mut cursors.backups).await;
-            sync_hist(state, &fed, &peer, &mut cursors.hist).await;
+            // Deletions first: an account deleted there isn't taken again below.
+            sync_tombs(state, &fed, &peer).await;
+            sync_peer(state, &fed, &peer).await;
+            sync_hist(state, &fed, &peer).await;
         }
         // Solo relays: only their names.
         for peer in fed.cfg.solo_peers.clone() {
-            sync_names(state, &fed, &peer, &mut cursors.names).await;
+            sync_names(state, &fed, &peer).await;
         }
     } else {
         // A solo relay in the name registry: the network's names, nothing else.
         for peer in fed.cfg.peers.clone() {
-            sync_names(state, &fed, &peer, &mut cursors.names).await;
+            sync_names(state, &fed, &peer).await;
         }
     }
 }
 
 /// Encrypted chat history of accounts (client history_sync.rs): a device may
 /// talk to any relay of the network and still find it.
-async fn sync_hist(state: &AppState, fed: &Fed, peer: &str, since: &mut CursorMap) {
+async fn sync_hist(state: &AppState, fed: &Fed, peer: &str) {
     loop {
-        let from = since.get(peer).cloned().unwrap_or_default();
+        let from = cursor(state, peer, "hist");
         let Some(r) = fed.get(peer, &format!("/v1/fed/hist?{}", cursor_query(&from))).await else { return };
         let Ok(rows) = r.json::<Vec<(String, String, i64)>>().await else { return };
         if rows.is_empty() { return; }
         let n = rows.len();
         // The cursor moves row by row, and stops before a record we couldn't
-        // fetch, so the next sync tries it again (AQUA-SEC-010).
-        let mut cur = from;
+        // fetch or write, so the next sync tries it again (AQUA-SEC-010).
+        let mut cur = from.clone();
         for (user, k, at) in &rows {
             if crate::directory::Directory::valid_name(user) && k.len() <= 64 {
                 let got = match fed.get(peer, &format!("/v1/fed/hist/{user}/{k}")).await {
                     Some(b) => match b.bytes().await {
-                        Ok(bytes) => { state.directory.fed_apply_hist(user, k, &bytes, *at); true }
+                        Ok(bytes) => state.directory.fed_apply_hist(user, k, &bytes, *at).is_ok(),
                         Err(_) => false,
                     },
                     None => false,
                 };
                 if !got {
-                    since.insert(peer.to_string(), cur);
+                    if cur != from { keep_cursor(state, peer, "hist", &cur); }
                     return;
                 }
             }
             cur = (*at, format!("{user}/{k}"));
         }
-        since.insert(peer.to_string(), cur);
+        if !keep_cursor(state, peer, "hist", &cur) { return; }
         if n < 1000 { return; }
     }
 }
 
-async fn sync_peer(
-    state: &AppState,
-    fed: &Fed,
-    peer: &str,
-    since_users: &mut CursorMap,
-    since_backups: &mut CursorMap,
-) {
+/// Most deletions signed by one relay taken in an hour by themselves; more
+/// wait (an admin deleting a lot at once is delayed, a relay that turned
+/// bad can't empty the network in one go).
+pub const TOMBS_PER_HOUR: usize = 20;
+
+/// Deleted accounts (A7), from `peer`: each signed by the relay that
+/// deleted it, whose key we keep.
+async fn sync_tombs(state: &AppState, fed: &Fed, peer: &str) {
+    for _ in 0..20 {
+        let from = cursor(state, peer, "tombs");
+        let Some(r) = fed.get(peer, &format!("/v1/fed/tombs?{}", cursor_query(&from))).await else { return };
+        // Relays before 1.21.0-25 don't have the route: nothing to read.
+        let Ok(rows) = r.json::<Vec<crate::directory::Tomb>>().await else { return };
+        if rows.is_empty() { return; }
+        let n = rows.len();
+        let mut cur = from.clone();
+        for t in &rows {
+            let key = (t.got_at, format!("{}:{}", t.uid, t.created_at));
+            let mine = t.origin == fed.node_id();
+            if !mine && fed.verify_tomb(t) {
+                if state.directory.tombs_from_since(&t.origin, now_ms() - 3_600_000) >= TOMBS_PER_HOUR {
+                    tracing::warn!(origin = %t.origin, "federation: many account deletions from one relay — the rest wait");
+                    if cur != from { keep_cursor(state, peer, "tombs", &cur); }
+                    return;
+                }
+                match state.directory.apply_tomb(t) {
+                    Ok(Some(name)) => {
+                        tracing::warn!(user = %name, origin = %t.origin, "federation: an account deleted on its relay — deleted here too");
+                        crate::journal::log(&name, "deleted", format!("by relay {}", t.origin));
+                        crate::drop_connections_pub(state, &name).await;
+                    }
+                    Ok(None) => {}
+                    Err(_) => {
+                        if cur != from { keep_cursor(state, peer, "tombs", &cur); }
+                        return;
+                    }
+                }
+            } else if !mine {
+                tracing::warn!(origin = %t.origin, "federation: a deletion not signed by a relay we keep a key for — not taken");
+            }
+            cur = key;
+        }
+        if !keep_cursor(state, peer, "tombs", &cur) { return; }
+        if n < 500 { return; }
+    }
+}
+
+async fn sync_peer(state: &AppState, fed: &Fed, peer: &str) {
+    // A8: accounts only from relays of the network (never a names-only pin).
+    if fed.pin_for(peer).is_some_and(Pin::names_only) {
+        return;
+    }
     // Accounts (paged: 500 per call).
-    loop {
-        let since = since_users.get(peer).cloned().unwrap_or_default();
+    'pages: loop {
+        let since = cursor(state, peer, "users");
         let Some(r) = fed.get(peer, &format!("/v1/fed/users?{}", cursor_query(&since))).await else { return };
         let Ok(rows) = r.json::<Vec<crate::directory::FedUser>>().await else { return };
         if rows.is_empty() {
             break;
         }
         let mut applied = 0;
+        let mut cur = since.clone();
+        let mut stopped = false;
         for u in &rows {
+            // Profile media travels with the account, so it is here even if
+            // the other relay goes away. Fetched before the account is
+            // written: written first, a failed fetch would never be retried
+            // (the row would be ours already, the versions equal).
             let before = state.directory.media_versions(&u.username).unwrap_or((0, 0, 0));
-            let res = state.directory.fed_apply_user(u);
+            let mut media = Vec::new();
+            let mut media_ok = true;
+            for (kind, old, new) in [("avatar", before.0, u.avatar_ver), ("banner", before.1, u.banner_ver), ("music", before.2, u.music_ver)] {
+                if new == old || new == 0 {
+                    continue;
+                }
+                let Some(k) = crate::directory::MediaKind::parse(kind) else { continue };
+                let got = match fed.get(peer, &format!("/v1/fed/media/{}/{kind}", u.username)).await {
+                    Some(r) => {
+                        let mime = r.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("application/octet-stream").to_string();
+                        r.bytes().await.ok().map(|b| (k, mime, b))
+                    }
+                    None => None,
+                };
+                match got {
+                    Some(m) => media.push(m),
+                    // Gone on the peer, maybe: after a few tries, without it.
+                    None if media_failed(&format!("{peer} {} {kind} {new}", u.username)) >= MEDIA_TRIES => {}
+                    None => media_ok = false,
+                }
+            }
+            if !media_ok {
+                stopped = true;
+                break;
+            }
+            let res = state.directory.fed_apply_user_from(u, fed.pin_for(peer).map(|p| p.id.as_str()).unwrap_or(""));
+            if res.failed {
+                // Not written here: the cursor stays before it.
+                tracing::warn!(%peer, user = %u.username, "federation: an account couldn't be written — will try again");
+                stopped = true;
+                break;
+            }
             if let Some((old, new)) = &res.displaced {
                 crate::move_live(state, old, new);
             }
             if res.applied {
                 applied += 1;
-                // Profile media travels with the account, so it is here
-                // even if the other relay goes away.
-                for (kind, old, new) in [("avatar", before.0, u.avatar_ver), ("banner", before.1, u.banner_ver), ("music", before.2, u.music_ver)] {
-                    if new == old || new == 0 {
-                        continue;
-                    }
-                    let Some(k) = crate::directory::MediaKind::parse(kind) else { continue };
-                    if let Some(r) = fed.get(peer, &format!("/v1/fed/media/{}/{kind}", u.username)).await {
-                        let mime = r.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("application/octet-stream").to_string();
-                        if let Ok(b) = r.bytes().await {
-                            state.directory.fed_store_media(&res.name, k, &mime, &b);
-                        }
-                    }
+                if !media.iter().all(|(k, mime, b)| state.directory.fed_store_media(&res.name, *k, mime, b)) {
+                    // The row is in, its media not: read the row again next
+                    // round with our media versions put back.
+                    state.directory.fed_media_unset(&res.name, before);
+                    stopped = true;
+                    break;
                 }
             }
+            cur = (u.updated_at, u.username.clone());
         }
-        let last = rows.last().map(|u| (u.updated_at, u.username.clone())).unwrap_or(since);
-        since_users.insert(peer.to_string(), last);
+        if cur != since && !keep_cursor(state, peer, "users", &cur) {
+            return;
+        }
         if applied > 0 {
             tracing::info!(peer, applied, "federation: accounts updated");
         }
-        if rows.len() < 500 {
-            break;
+        if stopped || rows.len() < 500 {
+            break 'pages;
         }
     }
     // Encrypted backups.
     // Paged like the rest (200 per call: only the first page was read), and
     // the cursor moves only past backups we have (AQUA-SEC-010).
     for _ in 0..50 {
-        let since = since_backups.get(peer).cloned().unwrap_or_default();
+        let since = cursor(state, peer, "backups");
         let Some(r) = fed.get(peer, &format!("/v1/fed/backups?{}", cursor_query(&since))).await else { return };
         let Ok(list) = r.json::<Vec<(String, i64)>>().await else { return };
         let n = list.len();
@@ -1816,19 +2582,19 @@ async fn sync_peer(
             let have = state.directory.backup_meta(&user).is_some_and(|(_, ours)| ours >= at);
             let ok = have || match fed.get(peer, &format!("/v1/fed/backup/{user}")).await {
                 Some(b) => match b.bytes().await {
-                    Ok(bytes) => { state.directory.fed_apply_backup(&user, &bytes, at); true }
+                    Ok(bytes) => state.directory.fed_apply_backup(&user, &bytes, at).is_ok(),
                     Err(_) => false,
                 },
                 None => false,
             };
             if !ok {
-                since_backups.insert(peer.to_string(), last);
+                if last != since { keep_cursor(state, peer, "backups", &last); }
                 return;
             }
             last = (at, user);
         }
         let moved = last != since;
-        since_backups.insert(peer.to_string(), last);
+        if moved && !keep_cursor(state, peer, "backups", &last) { return; }
         if n < 200 || !moved { return; }
     }
 }
@@ -1842,6 +2608,7 @@ pub fn routes() -> axum::Router<AppState> {
         .route("/v1/fed/names/hello", post(h_names_hello))
         .route("/v1/fed/hist", get(h_hist_list))
         .route("/v1/fed/hist/:user/:k", get(h_hist_get))
+        .route("/v1/fed/tombs", get(h_tombs))
         .route("/v1/fed/peers", get(h_peers))
         .route("/v1/fed/hello", post(h_hello))
         .route("/v1/fed/ping", get(h_ping))
@@ -1890,12 +2657,20 @@ pub async fn h_bot(State(state): State<AppState>, headers: HeaderMap, Path(name)
 /// this relay's bots, for a user of another relay of the network (that relay
 /// checked who they are; the request is signed for the network).
 pub async fn h_webapp_init(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Result<Json<serde_json::Value>, StatusCode> {
-    check(&state, &headers, "POST", "/v1/fed/webapp/init", &body)?;
+    let (_, sender) = check_from(&state, &headers, "POST", "/v1/fed/webapp/init", &body)?;
     let v: serde_json::Value = serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
     let bot = v["bot"].as_str().unwrap_or("").trim().trim_start_matches('@').to_lowercase();
     let user = v["user"].as_str().unwrap_or("").trim().to_lowercase();
     if bot.is_empty() || user.is_empty() || !state.directory.is_bot(&bot) {
         return Err(StatusCode::NOT_FOUND);
+    }
+    // A8: initData only for an account of the network we know, a few a
+    // minute per relay (a relay named any user and got data signed for them).
+    if !per_node_ok(&sender, "webapp", 120) {
+        return Err(StatusCode::TOO_MANY_REQUESTS);
+    }
+    if !state.directory.may_send_from_peer(crate::base_user(&user)) {
+        return Err(StatusCode::FORBIDDEN);
     }
     let sp = v["start_param"].as_str().unwrap_or("");
     let (init_data, signed) = crate::tgapi::init_data(&state, &bot, &user, Some(sp));
@@ -1967,7 +2742,7 @@ mod cursor_tests {
         super::Fed::new(c).unwrap()
     }
     fn pin_of(f: &super::Fed, url: &str) -> super::Pin {
-        super::Pin { url: url.into(), id: f.node_id(), key: f.node_pub() }
+        super::Pin { url: url.into(), id: f.node_id(), key: f.node_pub(), ..Default::default() }
     }
 
     /// AQUA-SEC-009: a v2 signature is bound to its recipient and path and
@@ -1989,7 +2764,7 @@ mod cursor_tests {
         assert!(!b.verify(&h, "GET", "/v1/fed/users?since=0", b""), "replayed");
         // Only the shared secret: B knows all its peers' keys → refused,
         // except for hello / ping.
-        assert!(b.strict());
+        assert!(b.enforced());
         let mut s = axum::http::HeaderMap::new();
         s.insert("x-aqua-fed", a.header("GET", "/v1/fed/users?since=0", b"").parse().unwrap());
         assert!(!b.verify(&s, "GET", "/v1/fed/users?since=0", b""));
@@ -1998,7 +2773,7 @@ mod cursor_tests {
         assert!(b.verify(&p, "GET", "/v1/fed/ping", b""));
         // A known sender id with a forged signature: refused.
         let forged = fed("http://evil");
-        let evil = with_pins(&forged, vec![super::Pin { url: "http://b".into(), id: b.node_id(), key: b.node_pub() }], vec![]);
+        let evil = with_pins(&forged, vec![super::Pin { url: "http://b".into(), id: b.node_id(), key: b.node_pub(), ..Default::default() }], vec![]);
         let fake = evil.sign2("http://b", "GET", "/v1/fed/users?since=0", b"").unwrap().replacen(&evil.node_id(), &a.node_id(), 1);
         let mut f2 = axum::http::HeaderMap::new();
         f2.insert("x-aqua-fed2", fake.parse().unwrap());
@@ -2015,26 +2790,27 @@ mod cursor_tests {
             if let (Some(o), serde_json::Value::Object(k)) = (v.as_object_mut(), f.hello_key_fields()) { o.extend(k); }
             serde_json::from_value(v).unwrap()
         };
-        let pin = super::pin_from_hello(&b, &hello(&a)).expect("first key is pinned");
+        let Some(super::PinChange::New(pin)) = super::pin_change(&b, &hello(&a)) else { panic!("first key is new") };
         assert_eq!(pin.id, a.node_id());
         let b = with_pins(&b, vec![pin.clone()], vec!["http://a".into()]);
-        assert!(super::pin_from_hello(&b, &hello(&a)).is_none(), "same key: nothing to change");
+        assert!(super::pin_change(&b, &hello(&a)).is_none(), "same key: nothing to change");
         // An impostor at A's address with its own key: refused.
         let imp = fed("http://a");
-        assert!(super::pin_from_hello(&b, &hello(&imp)).is_none());
+        assert!(matches!(super::pin_change(&b, &hello(&imp)), Some(super::PinChange::Conflict(p)) if p.conflict), "another key without a signature: a conflict for the admin");
         // A real rotation: the old key signs the new one.
         let new = aqua_core::crypto::SignSecret::generate();
         let mut c = a.cfg.clone();
         c.rotated = hex::encode(a.key.sign(format!("aqua-fed-rotate\n{}", hex::encode(new.public().as_bytes())).as_bytes()));
         c.node_key = hex::encode(new.to_bytes());
         let a2 = super::Fed::new(c).unwrap();
-        let moved = super::pin_from_hello(&b, &hello(&a2)).expect("signed rotation is accepted");
+        let Some(super::PinChange::Rotated(moved, retired, _)) = super::pin_change(&b, &hello(&a2)) else { panic!("signed rotation is accepted") };
+        assert_eq!(retired, vec![a.node_id()]);
         assert_eq!(moved.id, a2.node_id());
         // Revoked: never again.
         let mut rc = b.cfg.clone();
         rc.revoked.push(a2.node_id());
         let b2 = super::Fed::new(rc).unwrap();
-        assert!(super::pin_from_hello(&b2, &hello(&a2)).is_none());
+        assert!(super::pin_change(&b2, &hello(&a2)).is_none());
     }
 
     fn net_json(extra: &str) -> String {
@@ -2082,7 +2858,7 @@ mod cursor_tests {
         // is not possible (a const), so check the real leaked id instead.
         let f = fed("http://x");
         assert!(f.is_revoked(super::LEAKED_NODE_IDS[0]));
-        let leaked_pin = super::Pin { url: "http://l".into(), id: super::LEAKED_NODE_IDS[0].into(), key: "00".repeat(32) };
+        let leaked_pin = super::Pin { url: "http://l".into(), id: super::LEAKED_NODE_IDS[0].into(), key: "00".repeat(32), ..Default::default() };
         let g = with_pins(&f, vec![leaked_pin], vec!["http://l".into()]);
         let mut h = axum::http::HeaderMap::new();
         h.insert("x-aqua-fed2", format!("{}.n.{}.{}.00", super::now_ms(), super::LEAKED_NODE_IDS[0], g.node_id()).parse().unwrap());
@@ -2099,6 +2875,211 @@ mod cursor_tests {
         assert_eq!(std::fs::read_to_string(dir.path().join(super::NODE_KEY_FILE)).unwrap().trim(), c.node_key);
         // Not on the list: kept.
         assert_eq!(super::FedConfig::load_in(dir.path()).node_key, c.node_key);
+    }
+
+    /// A2: a request carrying both signatures uses up both. The same
+    /// request with `x-aqua-fed2` cut off doesn't pass again on the secret
+    /// (where the secret is still taken).
+    #[test]
+    fn a_v2_request_uses_up_its_secret_signature_too() {
+        let (a, b) = (fed("http://a"), fed("http://b"));
+        // B knows A's key, but not every peer's: the secret alone still works there.
+        let b = with_pins(&b, vec![pin_of(&a, "http://a")], vec!["http://a".into(), "http://old".into()]);
+        let a = with_pins(&a, vec![pin_of(&b, "http://b")], vec!["http://b".into()]);
+        assert!(!b.enforced());
+        let path = "/v1/fed/users?since=0";
+        let mut h = axum::http::HeaderMap::new();
+        h.insert("x-aqua-fed", a.header("GET", path, b"").parse().unwrap());
+        h.insert("x-aqua-fed2", a.sign2("http://b", "GET", path, b"").unwrap().parse().unwrap());
+        assert_eq!(b.verify_from(&h, "GET", path, b""), Some(super::Sender::Node(a.node_id())));
+        let mut stripped = h.clone();
+        stripped.remove("x-aqua-fed2");
+        assert!(!b.verify(&stripped, "GET", path, b""), "replayed without x-aqua-fed2");
+        // A fresh secret-only request is still fine here.
+        let mut s = axum::http::HeaderMap::new();
+        s.insert("x-aqua-fed", a.header("GET", path, b"").parse().unwrap());
+        assert_eq!(b.verify_from(&s, "GET", path, b""), Some(super::Sender::Secret));
+        // speaks_for: the pinned relay only, for its own address.
+        assert!(b.speaks_for(&super::Sender::Node(a.node_id()), "http://a"));
+        assert!(!b.speaks_for(&super::Sender::Secret, "http://a"));
+        assert!(!b.speaks_for(&super::Sender::Node("someone".into()), "http://a"));
+        assert!(b.speaks_for(&super::Sender::Secret, "http://old"), "unkeyed address, network not on keys");
+    }
+
+    /// A3: once every peer's key is known, keys are required — and a peer
+    /// without a key put on the list afterwards (by the admin, AQUA_FED_PEERS,
+    /// a hello, a made-up `tunnel:` id) no longer switches that off. Kept on
+    /// disk: a restart doesn't step back either.
+    #[test]
+    fn enforcement_is_a_ratchet() {
+        let (a, b) = (fed("http://a"), fed("http://b"));
+        assert!(!b.enforced(), "a new network is in transition");
+        assert_eq!(b.cfg.auth_mode, "transition");
+        let b = with_pins(&b, vec![pin_of(&a, "http://a")], vec!["http://a".into()]);
+        assert!(b.enforced());
+        assert_eq!(b.cfg.auth_mode, "enforced");
+        let b = with_pins(&b, b.cfg.pins.clone(), vec!["http://a".into(), "tunnel:made-up".into(), "http://old".into()]);
+        assert!(b.enforced(), "an unkeyed peer doesn't switch it off");
+        let mut s = axum::http::HeaderMap::new();
+        s.insert("x-aqua-fed", a.header("GET", "/v1/fed/users?since=0", b"").parse().unwrap());
+        assert!(!b.verify(&s, "GET", "/v1/fed/users?since=0", b""));
+        // On disk.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(super::FILE), net_json("")).unwrap();
+        let mut c = super::FedConfig::load_in(dir.path());
+        c.pins = vec![super::Pin { url: "http://p".into(), ..pin_of(&a, "http://p") }];
+        let f = super::Fed::new(c).unwrap();
+        assert!(f.enforced());
+        let mut back = super::FedConfig::load_in(dir.path());
+        assert_eq!(back.auth_mode, "enforced", "saved");
+        back.pins.clear();
+        back.peers.push("http://new".into());
+        assert!(super::Fed::new(back).unwrap().enforced(), "after a restart, without the pins: still required");
+    }
+
+    #[test]
+    fn deadline_enforces_and_never_reverts() {
+        let b = fed("http://b");
+        let mut c = b.cfg.clone();
+        c.peers = vec!["http://old".into()];
+        assert!(!super::Fed::new(c.clone()).unwrap().enforced());
+        assert!(c.auth_deadline > super::now_secs() + 13 * super::DAY, "14 days by default");
+        c.auth_deadline = super::now_secs() - 1;
+        let f = super::Fed::new(c).unwrap();
+        assert!(f.enforced(), "the end of the transition");
+        assert_eq!(f.cfg.auth_mode, "enforced");
+        let mut c = f.cfg.clone();
+        c.auth_deadline = super::now_secs() + 100 * super::DAY;
+        assert!(super::Fed::new(c).unwrap().enforced(), "a later deadline doesn't bring it back");
+        // A config that says something else: required.
+        let mut c = f.cfg.clone();
+        c.auth_mode = "off".into();
+        assert!(super::Fed::new(c).unwrap().enforced());
+    }
+
+    #[test]
+    fn legacy_window_expires_by_itself() {
+        let a = fed("http://a");
+        let b = with_pins(&fed("http://b"), vec![pin_of(&a, "http://a")], vec!["http://a".into()]);
+        assert!(b.enforced());
+        let mut c = b.cfg.clone();
+        c.legacy_until = super::now_secs() + 1;
+        let open = super::Fed::new(c).unwrap();
+        assert!(!open.enforced(), "the admin's window");
+        let mut s = axum::http::HeaderMap::new();
+        s.insert("x-aqua-fed", a.header("GET", "/v1/fed/users?since=0", b"").parse().unwrap());
+        assert!(open.verify(&s, "GET", "/v1/fed/users?since=0", b""));
+        assert_eq!(open.cfg.auth_mode, "enforced", "still on record");
+        std::thread::sleep(std::time::Duration::from_millis(2100));
+        assert!(open.enforced(), "closed by itself, with no restart");
+        let mut s = axum::http::HeaderMap::new();
+        s.insert("x-aqua-fed", a.header("GET", "/v1/fed/users?since=0", b"").parse().unwrap());
+        assert!(!open.verify(&s, "GET", "/v1/fed/users?since=0", b""));
+        assert_eq!(super::Fed::new(open.cfg.clone()).unwrap().cfg.legacy_until, 0, "and cleared from the config");
+    }
+
+    /// A solo relay pinned for the name registry reads names only.
+    #[test]
+    fn names_role_cannot_read_users() {
+        let (s, b) = (fed("http://s"), fed("http://b"));
+        let solo = super::Pin { role: "names".into(), ..pin_of(&s, "http://s") };
+        let mut c = b.cfg.clone();
+        c.pins = vec![solo];
+        c.solo_peers = vec!["http://s".into()];
+        let b = super::Fed::new(c).unwrap();
+        let s = with_pins(&s, vec![pin_of(&b, "http://b")], vec!["http://b".into()]);
+        for (path, ok) in [("/v1/fed/users?since=0", false), ("/v1/fed/backups?since=0", false), ("/v1/fed/inboxes2", false), ("/v1/fed/names?since=0", true), ("/v1/fed/ping", true)] {
+            let mut h = axum::http::HeaderMap::new();
+            h.insert("x-aqua-fed2", s.sign2("http://b", "GET", path, b"").unwrap().parse().unwrap());
+            assert_eq!(b.verify(&h, "GET", path, b""), ok, "{path}");
+        }
+        // A names pin doesn't make the network "all keys known".
+        let mut c = b.cfg.clone();
+        c.peers = vec![];
+        c.auth_mode.clear();
+        assert!(!c.all_keys_known());
+    }
+
+    fn hello_of(f: &super::Fed) -> super::Hello {
+        let mut v = serde_json::json!({ "url": super::my_id(&f.cfg), "peers": [] });
+        if let (Some(o), serde_json::Value::Object(k)) = (v.as_object_mut(), f.hello_key_fields()) { o.extend(k); }
+        serde_json::from_value(v).unwrap()
+    }
+    fn rotated(f: &super::Fed) -> std::sync::Arc<super::Fed> {
+        let mut c = f.cfg.clone();
+        super::rotate_into(f, &mut c, &aqua_core::crypto::SignSecret::generate());
+        super::Fed::new(c).unwrap()
+    }
+
+    /// A4: a peer that was off while a relay changed its key twice follows
+    /// the whole chain; the ids it passed are retired.
+    #[test]
+    fn rotation_chain_two_steps_offline_peer() {
+        let (a0, b) = (fed("http://a"), fed("http://b"));
+        let b = with_pins(&b, vec![pin_of(&a0, "http://a")], vec!["http://a".into()]);
+        let a1 = rotated(&a0);
+        let a2 = rotated(&a1);
+        assert_eq!(a2.cfg.rotations.len(), 2);
+        let Some(super::PinChange::Rotated(p, retired, keys)) = super::pin_change(&b, &hello_of(&a2)) else { panic!("two steps followed") };
+        assert_eq!((p.id.as_str(), p.rot_seq), (a2.node_id().as_str(), 2));
+        assert_eq!(retired, vec![a0.node_id(), a1.node_id()]);
+        assert_eq!(keys, vec![a0.node_pub(), a1.node_pub()]);
+        // The one-step field alone (a relay of 1.21.0-24) isn't enough for two.
+        let mut h = hello_of(&a2);
+        h.rotations.clear();
+        assert!(matches!(super::pin_change(&b, &h), Some(super::PinChange::Conflict(_))));
+        // A forged step (signed by another key) breaks the chain.
+        let mut h = hello_of(&a2);
+        h.rotations[0].sig = hex::encode(fed("http://x").key.sign(b"x"));
+        assert!(matches!(super::pin_change(&b, &h), Some(super::PinChange::Conflict(_))));
+        // At most MAX_ROTATIONS kept.
+        let mut f = a2;
+        for _ in 0..10 { f = rotated(&f); }
+        assert_eq!(f.cfg.rotations.len(), super::MAX_ROTATIONS);
+    }
+
+    /// A4: once followed away from, an old key (or one of the chain) never
+    /// comes back — neither by a hello of its own nor by a new chain from it.
+    #[test]
+    fn retired_id_cannot_rotate_again() {
+        let (a0, b) = (fed("http://a"), fed("http://b"));
+        let b = with_pins(&b, vec![pin_of(&a0, "http://a")], vec!["http://a".into()]);
+        let a1 = rotated(&a0);
+        let Some(super::PinChange::Rotated(p, retired, _)) = super::pin_change(&b, &hello_of(&a1)) else { panic!() };
+        let mut c = b.cfg.clone();
+        c.pins = vec![p];
+        c.retired = retired;
+        let b = super::Fed::new(c).unwrap();
+        assert!(super::pin_change(&b, &hello_of(&a0)).is_none(), "the old key's own hello");
+        // Someone with the old key makes a chain from it to a key of theirs.
+        let evil = rotated(&a0);
+        assert!(!matches!(super::pin_change(&b, &hello_of(&evil)), Some(super::PinChange::Rotated(..))), "a chain from a retired key");
+        // And the old key can't sign requests.
+        let mut h = axum::http::HeaderMap::new();
+        let a0b = with_pins(&a0, vec![pin_of(&b, "http://b")], vec!["http://b".into()]);
+        h.insert("x-aqua-fed2", a0b.sign2("http://b", "GET", "/v1/fed/users?since=0", b"").unwrap().parse().unwrap());
+        assert!(!b.verify(&h, "GET", "/v1/fed/users?since=0", b""));
+    }
+
+    /// Review: deletions a relay signed before it changed its key are still
+    /// taken by a peer that followed the change; none signed after it.
+    #[test]
+    fn tombs_signed_with_a_retired_key_before_the_change() {
+        let (a0, b) = (fed("http://a"), fed("http://b"));
+        let b = with_pins(&b, vec![pin_of(&a0, "http://a")], vec!["http://a".into()]);
+        let before = a0.sign_tomb("1000000001", "gone", 1, super::now_secs() as i64 - 10);
+        let a1 = rotated(&a0);
+        let Some(super::PinChange::Rotated(p, retired, keys)) = super::pin_change(&b, &hello_of(&a1)) else { panic!() };
+        let mut c = b.cfg.clone();
+        c.pins = vec![p];
+        let now = super::now_secs();
+        c.retired_keys = retired.iter().zip(&keys).map(|(r, k)| (r.clone(), k.clone(), now)).collect();
+        c.retired = retired;
+        let b = super::Fed::new(c).unwrap();
+        assert!(b.verify_tomb(&before), "signed before the change");
+        let after = a0.sign_tomb("1000000002", "other", 1, now as i64 + 100);
+        assert!(!b.verify_tomb(&after), "the old key after the change: no");
+        assert!(b.verify_tomb(&a1.sign_tomb("1000000003", "x", 1, now as i64 + 100)), "the new key: yes");
     }
 
     #[test]

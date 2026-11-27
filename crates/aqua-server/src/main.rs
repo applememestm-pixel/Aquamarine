@@ -122,6 +122,8 @@ async fn main() -> anyhow::Result<()> {
             let _ = tokio::signal::ctrl_c().await;
         })
         .await?;
+    // Used signatures on disk, marked clean (replay.rs).
+    aqua_server::replay::Replay::shutdown_all();
     Ok(())
 }
 

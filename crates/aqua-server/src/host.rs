@@ -244,6 +244,7 @@ pub fn power(restart: bool, before_exit: impl FnOnce() + Send + 'static) {
             }
         }
         before_exit();
+        crate::replay::Replay::shutdown_all();
         if restart {
             if let Ok(exe) = std::env::current_exe() {
                 // The new one waits for the port (main.rs binds with retries).

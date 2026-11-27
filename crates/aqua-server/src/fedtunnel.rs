@@ -143,11 +143,17 @@ pub struct Poll {
 
 /// A peer waits here for requests meant for it.
 pub async fn h_poll(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Result<Json<Vec<WireReq>>, StatusCode> {
-    crate::fed::check_pub(&state, &headers, "POST", "/v1/fed/tunnel", &body)?;
+    let (fed, sender) = crate::fed::check_pub(&state, &headers, "POST", "/v1/fed/tunnel", &body)?;
     let p: Poll = serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
     let id = p.id.trim().trim_end_matches('/').to_string();
     if !(id.starts_with("http") || id.starts_with("tunnel:")) || id.len() > 200 {
         return Err(StatusCode::BAD_REQUEST);
+    }
+    // Only the relay whose key is pinned for `id` takes its requests (the id
+    // used to be taken from the body on the shared secret alone).
+    if !fed.speaks_for(&sender, &id) {
+        tracing::warn!(%id, "federation: a reverse link for a relay the caller isn't — refused");
+        return Err(StatusCode::FORBIDDEN);
     }
     if !p.v.is_empty() && !crate::relay_version_ok(&p.v) {
         return Err(StatusCode::UPGRADE_REQUIRED);
@@ -168,7 +174,7 @@ pub async fn h_poll(State(state): State<AppState>, headers: HeaderMap, body: Byt
     if let Ok(mut l) = s.label.lock() { *l = p.addr.trim().trim_end_matches('/').to_string(); }
     // It signed with our secret: it's of our network. Know it by this id,
     // instead of an address of it that never answered.
-    crate::fed::adopt_peer(&state, &id, p.addr.trim().trim_end_matches('/'));
+    crate::fed::adopt_peer(&state, &id, p.addr.trim().trim_end_matches('/'), &sender);
     let deadline = Instant::now() + Duration::from_secs(25);
     loop {
         let wait = s.notify.notified();
@@ -186,9 +192,12 @@ pub async fn h_poll(State(state): State<AppState>, headers: HeaderMap, body: Byt
 
 /// Answers to the requests handed out by `h_poll`.
 pub async fn h_reply(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Result<StatusCode, StatusCode> {
-    crate::fed::check_pub(&state, &headers, "POST", "/v1/fed/tunnel/reply", &body)?;
+    let (fed, sender) = crate::fed::check_pub(&state, &headers, "POST", "/v1/fed/tunnel/reply", &body)?;
     let replies: Vec<WireReply> = serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
-    let all = sides().lock().map(|g| g.values().cloned().collect::<Vec<_>>()).unwrap_or_default();
+    // Answers only to requests handed to the caller's own reverse link.
+    let all = sides().lock()
+        .map(|g| g.iter().filter(|(id, _)| fed.speaks_for(&sender, id)).map(|(_, s)| s.clone()).collect::<Vec<_>>())
+        .unwrap_or_default();
     for r in replies {
         for s in &all {
             let tx = s.waiters.lock().ok().and_then(|mut w| w.remove(&r.rid));
@@ -208,7 +217,11 @@ pub async fn h_reply(State(state): State<AppState>, headers: HeaderMap, body: By
 pub fn spawn(state: AppState) {
     tokio::spawn(async move {
         let running: Arc<Mutex<std::collections::HashSet<String>>> = Default::default();
-        let router = crate::fed::routes().with_state(state.clone());
+        // With the answer signing of the real routes: a peer that pinned our
+        // key drops answers without it (`Fed::checked`).
+        let router = crate::fed::routes()
+            .layer(axum::middleware::from_fn_with_state(state.clone(), crate::fed::sign_answers))
+            .with_state(state.clone());
         loop {
             if let Some(fed) = crate::fed::current(&state) {
                 for peer in fed.cfg.peers.iter().filter(|p| p.starts_with("http")) {
@@ -266,10 +279,15 @@ async fn poll_loop(state: &AppState, peer: &str, router: axum::Router) {
             }
         };
         fails = 0;
+        // Requests over the link say no version of their own: they carry the
+        // one the peer itself told us (`/v1/stats`), and only if it is one we
+        // talk to — otherwise the routes refuse them (426) as they would a
+        // direct request from it.
+        let version = if reqs.is_empty() { None } else { fed.peer_version(peer).await };
         for q in reqs {
-            let (st, peer, http, router) = (state.clone(), peer.to_string(), http.clone(), router.clone());
+            let (st, peer, http, router, version) = (state.clone(), peer.to_string(), http.clone(), router.clone(), version.clone());
             tokio::spawn(async move {
-                let reply = run_local(router, q).await;
+                let reply = run_local(router, q, version.as_deref()).await;
                 let Some(fed) = crate::fed::current(&st) else { return };
                 let body = serde_json::to_vec(&[reply]).unwrap_or_default();
                 let mut rb = http.post(format!("{peer}/v1/fed/tunnel/reply"))
@@ -288,7 +306,7 @@ async fn poll_loop(state: &AppState, peer: &str, router: axum::Router) {
 
 /// Run a peer's request against our own federation routes (in-process:
 /// the signature it carries is checked there as usual).
-async fn run_local(router: axum::Router, q: WireReq) -> WireReply {
+async fn run_local(router: axum::Router, q: WireReq, version: Option<&str>) -> WireReply {
     use tower::ServiceExt;
     let fail = |status: u16| WireReply { rid: q.rid, status, ct: String::new(), body: String::new(), sig2: String::new() };
     if !q.path.starts_with("/v1/fed/") || q.path.starts_with("/v1/fed/tunnel") {
@@ -302,6 +320,9 @@ async fn run_local(router: axum::Router, q: WireReq) -> WireReply {
         .header("content-type", "application/json");
     if !q.sig2.is_empty() {
         b = b.header("x-aqua-fed2", q.sig2.as_str());
+    }
+    if let Some(v) = version {
+        b = b.header("x-aqua-version", v);
     }
     let Ok(req) = b.body(axum::body::Body::from(body))
     else {

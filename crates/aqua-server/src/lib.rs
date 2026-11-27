@@ -31,7 +31,7 @@ pub mod blobstore;
 mod blob_upload;
 mod paid;
 pub mod fed;
-mod replay;
+pub mod replay;
 pub mod games;
 pub mod directory;
 pub mod tgapi;
@@ -1451,7 +1451,15 @@ async fn signup_user(
 // A relay of a network signs a short-lived pass for one of its accounts; a
 // solo relay that shares the name registry with that network (same secret)
 // checks it and lets the person sign up if its rules say `*@X` or
-// `@name@X`. `aqpass:` + base64url(JSON {u, h, x, n}) + "." + hex HMAC.
+// `@name@X`. `aqpass:` + base64url(JSON {u, i, h, x, n, k, s}) + "." + hex
+// HMAC. v2 (1.21.0-25): `k` the home relay's node id, `s` its node key's
+// signature over `aqpass-v2\n{u}\n{i}\n{h}\n{x}\n{n}` — the secret alone
+// no longer makes a pass once keys are required. Older relays read only the
+// HMAC and ignore `k` and `s`.
+
+fn pass_message(u: &str, i: &str, h: &str, x: i64, n: &str) -> String {
+    format!("aqpass-v2\n{u}\n{i}\n{h}\n{x}\n{n}")
+}
 
 const PASS_SECS: i64 = 10 * 60;
 
@@ -1477,7 +1485,9 @@ async fn pass_create(State(state): State<AppState>, Caller(dh): Caller) -> Resul
     rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut n);
     let exp = directory::now_secs() as i64 + PASS_SECS;
     let uid = state.directory.uid_of(&me).unwrap_or_default();
-    let json = serde_json::json!({ "u": me, "i": uid, "h": host_of(&home), "x": exp, "n": hex::encode(n) }).to_string();
+    let (h, n) = (host_of(&home), hex::encode(n));
+    let (k, sig) = fed.sign_pass(&pass_message(&me, &uid, &h, exp, &n));
+    let json = serde_json::json!({ "u": me, "i": uid, "h": h, "x": exp, "n": n, "k": k, "s": sig }).to_string();
     let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json);
     let pass = format!("aqpass:{payload}.{}", pass_mac(&fed.cfg.secret, &payload));
     journal::log(&me, "pass", "");
@@ -1491,7 +1501,6 @@ struct PassInfo { user: String, uid: String, host: String }
 /// Using it uses it up.
 fn check_pass(state: &AppState, pass: &str) -> Option<PassInfo> {
     use base64::Engine;
-    static USED: std::sync::Mutex<Option<std::collections::HashMap<String, i64>>> = std::sync::Mutex::new(None);
     let fed = fed::registry(state)?;
     let (payload, mac) = pass.trim().strip_prefix("aqpass:")?.split_once('.')?;
     let want = pass_mac(&fed.cfg.secret, payload);
@@ -1505,14 +1514,24 @@ fn check_pass(state: &AppState, pass: &str) -> Option<PassInfo> {
     if exp < now || exp > now + PASS_SECS + 60 {
         return None;
     }
-    let nonce = v["n"].as_str()?.to_string();
-    let mut g = USED.lock().ok()?;
-    let used = g.get_or_insert_with(std::collections::HashMap::new);
-    used.retain(|_, x| *x >= now);
-    if used.insert(nonce, exp).is_some() {
+    // A deleted account (A7) gets no new home through an old pass.
+    if v["i"].as_str().is_some_and(|uid| !uid.is_empty() && state.directory.uid_deleted(uid)) {
         return None;
     }
-    Some(PassInfo { user: v["u"].as_str()?.to_string(), uid: v["i"].as_str().unwrap_or("").to_string(), host: v["h"].as_str()?.to_string() })
+    let (user, uid, host, nonce) = (v["u"].as_str()?, v["i"].as_str().unwrap_or(""), v["h"].as_str()?, v["n"].as_str()?);
+    // v2: signed by the home relay's node key. Once keys are required here,
+    // a pass without that (made with the secret alone) isn't taken.
+    let msg = pass_message(user, uid, host, exp, nonce);
+    match fed.pass_signed_by(v["k"].as_str().unwrap_or(""), v["s"].as_str().unwrap_or(""), &msg, host) {
+        Some(false) => return None,
+        None if fed.enforced() => return None,
+        _ => {}
+    }
+    // Once: on disk with the signed requests (a restart used to forget it).
+    if !fed.take_once("pass", &format!("pass:{nonce}"), exp * 1000) {
+        return None;
+    }
+    Some(PassInfo { user: user.to_string(), uid: uid.to_string(), host: host.to_string() })
 }
 
 #[derive(Deserialize)]
@@ -2003,7 +2022,8 @@ async fn admin_get_fed(State(state): State<AppState>, headers: axum::http::Heade
         "revoked": c.revoked,
         // REV2-004: relays that said hello without being admitted.
         "pending_nodes": c.pending_nodes.iter().map(|p| serde_json::json!({ "url": p.url, "id": p.id })).collect::<Vec<_>>(),
-        "strict": fed::registry(&state).is_some_and(|f| f.strict()),
+        "strict": fed::registry(&state).is_some_and(|f| f.enforced()),
+        "auth": fed::registry(&state).map(|f| fed::auth_status(&f)),
     })))
 }
 
@@ -2033,6 +2053,52 @@ async fn admin_fed_rotate(State(state): State<AppState>, headers: axum::http::He
     let id = fed::rotate_key(&state).await.ok_or((StatusCode::CONFLICT, "not in a network".to_string()))?;
     journal::log("admin", "fed-rotate", &id);
     Ok(Json(serde_json::json!({ "node_id": id })))
+}
+
+#[derive(Deserialize)]
+struct FedAuth {
+    action: String,
+    #[serde(default)]
+    days: u64,
+    #[serde(default)]
+    legacy_days: u64,
+    #[serde(default)]
+    confirm: bool,
+}
+
+/// `POST /v1/admin/fed/auth {action: enforce | postpone {days} | legacy
+/// {legacy_days ≤ 7, confirm: true} | legacy_end}` — the key requirement of
+/// the network (fed.rs `set_auth`). Every change goes to the journal.
+async fn admin_fed_auth(State(state): State<AppState>, headers: axum::http::HeaderMap, Json(b): Json<FedAuth>) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    admin_authed(&state, &headers).map_err(|s| (s, String::new()))?;
+    let days = if b.action == "legacy" { b.legacy_days.max(b.days) } else { b.days };
+    let st = fed::set_auth(&state, &b.action, days, b.confirm).map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    let note = if days > 0 { format!("{} {days}d", b.action) } else { b.action.clone() };
+    journal::log("admin", "fed-auth", note.clone());
+    tracing::warn!(change = %note, "federation: the admin changed the node key requirement");
+    Ok(Json(st))
+}
+
+#[derive(Deserialize)]
+struct FedResync {
+    #[serde(default)]
+    peer: Option<String>,
+    #[serde(default)]
+    stream: Option<String>,
+}
+
+/// `POST /v1/admin/fed/resync {peer?, stream?}` — read a peer's streams (or
+/// every peer's) from the start again, e.g. after restoring the database.
+async fn admin_fed_resync(State(state): State<AppState>, headers: axum::http::HeaderMap, Json(b): Json<FedResync>) -> Result<StatusCode, (StatusCode, String)> {
+    admin_authed(&state, &headers).map_err(|s| (s, String::new()))?;
+    let stream = b.stream.filter(|s| !s.is_empty());
+    if stream.as_deref().is_some_and(|s| !matches!(s, "users" | "backups" | "hist" | "names" | "tombs")) {
+        return Err((StatusCode::BAD_REQUEST, "stream: users, backups, hist, names or tombs".into()));
+    }
+    let peer = b.peer.map(|p| p.trim().trim_end_matches('/').to_string()).filter(|p| !p.is_empty());
+    fed::resync(&state, peer.as_deref(), stream.as_deref());
+    journal::log("admin", "fed-resync", format!("{} {}", peer.as_deref().unwrap_or("*"), stream.as_deref().unwrap_or("*")));
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Deserialize)]
@@ -2082,28 +2148,27 @@ async fn admin_set_fed(
     Json(u): Json<FedUpdate>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     admin_authed(&state, &headers).map_err(|c| (c, String::new()))?;
-    let mut c = fed::FedConfig::load();
-    if let Some(sec) = u.secret.filter(|s| !s.trim().is_empty()) {
-        if sec.trim().len() < 16 {
-            return Err((StatusCode::BAD_REQUEST, "the shared secret must be at least 16 characters".into()));
-        }
-        c.secret = sec.trim().to_string();
+    let secret = u.secret.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    if secret.as_ref().is_some_and(|s| s.len() < 16) {
+        return Err((StatusCode::BAD_REQUEST, "the shared secret must be at least 16 characters".into()));
     }
-    c.peers = u.peers.into_iter().map(|p| p.trim().trim_end_matches('/').to_string()).filter(|p| p.starts_with("http") || p.starts_with("tunnel:")).collect();
-    c.public_url = u.public_url.trim().trim_end_matches('/').to_string();
-    if let Some(m) = u.mode.filter(|m| m == "solo" || m == "network") {
-        // Into a network: a secret is needed to sign with — make one.
-        if m == "network" && c.secret.len() < 16 {
-            let mut b = [0u8; 24];
-            rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut b);
-            c.secret = hex::encode(b);
+    // Under the federation lock (fed::admin_update): a key pinned meanwhile
+    // isn't written over by a copy read from disk before it.
+    let next = fed::admin_update(&state, |c| {
+        if let Some(sec) = secret { c.secret = sec; }
+        c.peers = u.peers.into_iter().map(|p| p.trim().trim_end_matches('/').to_string()).filter(|p| p.starts_with("http") || p.starts_with("tunnel:")).collect();
+        c.public_url = u.public_url.trim().trim_end_matches('/').to_string();
+        if let Some(m) = u.mode.filter(|m| m == "solo" || m == "network") {
+            // Into a network: a secret is needed to sign with — make one.
+            if m == "network" && c.secret.len() < 16 {
+                let mut b = [0u8; 24];
+                rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut b);
+                c.secret = hex::encode(b);
+            }
+            c.mode = m;
         }
-        c.mode = m;
-    }
-    c.save().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let next = fed::Fed::new(fed::FedConfig::load());
+    }).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let active = next.is_some();
-    if let Ok(mut g) = state.fed.write() { *g = next.clone(); }
     if let Some(f) = next {
         let st = state.clone();
         tokio::spawn(async move { let new = f.hello_all().await; fed::absorb_vouches(&st); let _ = fed::add_peers(&st, &new); st.fed_kick.notify_one(); });
@@ -2182,15 +2247,12 @@ async fn admin_fed_join(
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     admin_authed(&state, &headers).map_err(|c| (c, String::new()))?;
     let (url, secret) = fed::parse_invite(&b.invite).ok_or((StatusCode::BAD_REQUEST, "that's not an invitation (aquafed:…)".into()))?;
-    let mut c = fed::FedConfig::load();
-    c.secret = secret;
-    c.join_token = fed::invite_token(&b.invite).unwrap_or_default();
-    c.mode = if b.names_only { "solo".into() } else { "network".into() };
-    if !c.peers.contains(&url) { c.peers.push(url.clone()); }
-    // Not saved: a detected address can change (and may be re-detected).
-    c.save().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let next = fed::Fed::new(fed::FedConfig::load());
-    if let Ok(mut g) = state.fed.write() { *g = next.clone(); }
+    let next = fed::admin_update(&state, |c| {
+        c.secret = secret;
+        c.join_token = fed::invite_token(&b.invite).unwrap_or_default();
+        c.mode = if b.names_only { "solo".into() } else { "network".into() };
+        if !c.peers.contains(&url) { c.peers.push(url.clone()); }
+    }).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let Some(f) = next else { return Err((StatusCode::BAD_REQUEST, "could not start federation".into())) };
     if !f.same_network(&url).await {
         return Err((StatusCode::BAD_GATEWAY, format!("{url} doesn't answer or doesn't accept this secret")));
@@ -3240,6 +3302,39 @@ async fn admin_detail(
     }))
 }
 
+/// [`drop_connections`] for other modules (fed.rs: a deletion from the network).
+pub(crate) async fn drop_connections_pub(state: &AppState, name: &str) {
+    drop_connections(state, name).await
+}
+
+/// Delete a person's account here (the admin). In a network, a tombstone
+/// signed by this relay goes with it (A7), made before the account goes, so
+/// the other relays delete their copies and no copy brings it back.
+pub async fn delete_account(state: &AppState, name: &str) -> bool {
+    let dir = state.directory.clone();
+    let fed = fed::registry(state);
+    let n = name.to_string();
+    let ok = tokio::task::spawn_blocking(move || {
+        if let Some((uid, created_at)) = dir.account_generation(&n) {
+            let now = directory::now_secs() as i64;
+            let t = match &fed {
+                Some(f) => f.sign_tomb(&uid, &n, created_at, now),
+                None => directory::Tomb { uid, created_at, username: n.clone(), deleted_at: now, ..Default::default() },
+            };
+            if dir.add_tomb(&t).is_err() {
+                tracing::error!(user = %n, "the deletion can't be recorded for the network — not deleted");
+                return false;
+            }
+        }
+        dir.delete_person(&n)
+    }).await.unwrap_or(false);
+    if ok {
+        drop_connections(state, name).await;
+        state.fed_kick.notify_one();
+    }
+    ok
+}
+
 /// Drop `name`'s connections (the account and its devices, `name~dev`):
 /// their senders go, so each socket's loop ends (`rx` closes).
 async fn drop_connections(state: &AppState, name: &str) {
@@ -3306,13 +3401,9 @@ async fn admin_delete_user(
     if q.ban && state.directory.ban(&name).is_none() {
         return Err((StatusCode::NOT_FOUND, "no such account".into()));
     }
-    let dir = state.directory.clone();
-    let n = name.clone();
-    let ok = tokio::task::spawn_blocking(move || dir.delete_person(&n)).await.unwrap_or(false);
-    if !ok {
+    if !delete_account(&state, &name).await {
         return Err((StatusCode::NOT_FOUND, "no such account".into()));
     }
-    drop_connections(&state, &name).await;
     tracing::warn!(user = %name, ban = q.ban, "admin: account deleted");
     journal::log(&name, "deleted", if q.ban { "banned" } else { "" });
     Ok(Json(serde_json::json!({ "ok": true })))
@@ -3763,6 +3854,8 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/admin/fed/rotate", post(admin_fed_rotate))
         .route("/v1/admin/fed/revoke", post(admin_fed_revoke))
         .route("/v1/admin/fed/admit", post(admin_fed_admit))
+        .route("/v1/admin/fed/auth", post(admin_fed_auth))
+        .route("/v1/admin/fed/resync", post(admin_fed_resync))
         .route("/v1/me/seal", get(seal_get).put(seal_put))
         .route("/v1/bundle/:user",   post(upload_bundle).get(fetch_bundle))
         .route("/v1/ws",             get(ws_upgrade))
@@ -3816,7 +3909,10 @@ pub async fn serve_embedded(
     botmaker::spawn(state.clone());
     quota::spawn(state.clone());
     // Stopped: the files stay (blobstore.rs).
-    axum::serve(listener, app(state).into_make_service_with_connect_info::<std::net::SocketAddr>()).with_graceful_shutdown(shutdown).await
+    let r = axum::serve(listener, app(state).into_make_service_with_connect_info::<std::net::SocketAddr>()).with_graceful_shutdown(shutdown).await;
+    // Used signatures on disk, marked clean (replay.rs).
+    replay::Replay::shutdown_all();
+    r
 }
 
 #[cfg(test)]

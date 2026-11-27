@@ -15,11 +15,14 @@
 | CZ-SEC-001 | CeZeOs | P0 | Sessions | подтверждённый баг | исправлено | PASS |
 | AQUA-SEC-007 | Aquamarine | P1 | Prekeys | подтверждённый баг | исправлено | PASS |
 | AQUA-SEC-008 | Aquamarine | P1 | E2EE client | CONFIRMED (code) | исправлено | PASS (vault), клиент — CI |
-| AQUA-SEC-009 | Aquamarine | P1 | Federation trust | CONFIRMED (code) | частично (повтор подписи); ключи узлов — проект | PASS (replay) |
-| AQUA-SEC-010 | Aquamarine | P1 | Federation cursors | CONFIRMED (code) | частично | PASS (unit) |
+| AQUA-SEC-009 | Aquamarine | P1 | Federation trust | CONFIRMED (code) | 1.21.0-25: ключи узлов обязательны (переход 14 дней, храповик), туннель, повтор, роли, ротация, конфликты; остатки — в FEDERATION_SECURITY | TESTED (CI/локально); живая сеть — не проверено |
+| AQUA-SEC-010 | Aquamarine | P1 | Federation cursors | CONFIRMED (code) | 1.21.0-25: курсоры на диске, не двигаются при ошибке; подписанные надгробия | TESTED (CI/локально) |
+| AQUA-SEC-018 | Aquamarine | P1 | Federation tunnel | CONFIRMED (test) | 1.21.0-25: каждый запрос по обратному каналу получал 426; опрос/ответ за чужой узел по общему секрету | TESTED |
+| AQUA-SEC-019 | Aquamarine | P2 | Federation config | CONFIRMED (test) | 1.21.0-25: параллельные изменения конфигурации федерации затирали друг друга (потерянное поручительство) | TESTED |
+| AQUA-SEC-020 | Aquamarine | P2 | Federation sync | CONFIRMED (test) | 1.21.0-25: аккаунт, созданный в ту же секунду, мог получить время меньше курсора и не синхронизироваться | TESTED |
 | AQUA-SEC-011 | Aquamarine | P1 | Queues / DoS | CONFIRMED (code) | частично | PASS |
 | AQUA-SEC-012 | Aquamarine | P1 | Updates | CONFIRMED (code) | подпись сумм во всех трёх путях, привязана к версии выпуска; остатки — в разделе о 012 | тесты в CI; на выпуске не проверено |
-| AQUA-SEC-013 | Aquamarine | P1 | Android key storage | REPORTED | открыто: код есть, выключен с 1.21.0-24 (`KEYSTORE_WRAP`) | — |
+| AQUA-SEC-013 | Aquamarine | P0 | Android key storage + backup | CONFIRMED (code) | **ОТКРЫТО** до проверки на физическом телефоне. Код в 1.21.0-25: Keystore включён (в 1.21.0-24 был выключен), бэкап Android выключен; экспорта в файл нет (задача E) | unit + эмулятор в CI; телефон — не проверено |
 | AQUA-SEC-014 | Aquamarine | P1 | CI / supply chain | CONFIRMED | частично | аудит работает, нашёл 14 уязвимостей |
 | AQUA-SEC-016 | Aquamarine | P1 | Dependencies | CONFIRMED (cargo audit) | исправлено в 1.21.0-23 (раунд 2, `GPT_REVIEW_RESOLUTION.md`) | audit в CI |
 | AQUA-SEC-017 | Aquamarine | P0* | Federation version gate | регрессия моего изменения, найдена при ревью | исправлено до выпуска | PASS |
@@ -173,6 +176,11 @@
 | CZ-SEC-002 | `server.mjs:506-522` | Wiki: любой участник правит любую статью, удаления и модерации нет | REPORTED |
 | CZ-SEC-003 | `server.mjs` | Rate limiting отсутствует (подробности ниже) | REPORTED |
 
+**AQUA-SEC-013 — ключ хранилища на Android (1.21.0-25):**
+- найдено сверх отчёта: ни одна сборка не отключала системный бэкап — в облако Google и на новый телефон уходили `vault.sqlite` вместе с открытым `master.key` и localStorage;
+- исправление: `android/backup/*.xml` + атрибуты манифеста во всех сборках (проверка `tools/check_android.py`); перенос ключа в Keystore и экран восстановления (`aqua-client-ui/src/vault_key.rs`, тесты там же; `tools/android_keystore_test.sh`);
+- остаётся: копии, сделанные Google до обновления, не удаляются; Keystore проверен только на эмуляторе (программный); пока перезагрузки не было, открытый `master.key` лежит на устройстве; `master.key.rk` открывается 24 словами, а сами слова лежат внутри хранилища; localStorage (токен бота мини-приложений, хэши замков чатов) не шифруется; экспорта аккаунта в файл нет; iOS не проверялся.
+
 **AQUA-SEC-009 — общий секрет федерации:**
 - в подписи нет nonce и получателя: запрос, подписанный для A, принимается узлом B;
 - любой держатель секрета переписывает аккаунты (`identity_dh`, пароль, устройства) и подделывает `msg.from`.
@@ -317,3 +325,26 @@
 - **011.** Ограниченные каналы, лимиты соединений и сообщений, чистка таблиц, лимит дискового inbox (20 000 конвертов / 256 МиБ, старые вытесняются) — есть. `fedtunnel` не перепроверен.
 - **014.** Аудит зависимостей блокирует PR, push на main, права только на чтение, Dependabot — есть. Открыто: actions по тегам, не по SHA; branch protection — настройка репозитория.
 
+
+
+---
+
+## Федерация — 1.21.0-25 (решение владельца 26.11: обязательные ключи узлов)
+
+Полная модель, отложенное и риски перехода — [FEDERATION_SECURITY.md](FEDERATION_SECURITY.md). Здесь — что найдено и чем закрыто.
+
+| Находка | Было | Стало | Тесты |
+|---|---|---|---|
+| **AQUA-SEC-018** обратный канал | `fedtunnel::run_local` не ставил `x-aqua-version` → каждый запрос по каналу `426`; роутер канала без `sign_answers` → ответы отбрасывались узлом с закреплённым ключом. `h_poll` брал `id` из тела: любой с секретом забирал запросы чужого узла и убирал чужой адрес; `h_reply` принимал ответ на любой `rid` | Версия опрошенного узла из его `/v1/stats`; ответы подписываются; опрос/ответ — только тот, чей ключ закреплён за id (`Fed::speaks_for`); адрес убирает только владелец | `tunnel_peer_with_pinned_key_syncs_both_ways` (падал до исправления — проверено), `tunnel_poll_cannot_claim_another_node` |
+| 009: повтор без v2 | Подпись `x-aqua-fed`, посланная вместе с v2, не расходовалась: запрос повторялся, сняв `x-aqua-fed2` | Расходуются обе | `a_v2_request_uses_up_its_secret_signature_too` |
+| 009: строгий режим выключался | `strict()` считался на каждый запрос; любой узел без ключа в списке (в том числе выдуманный `tunnel:`) выключал его | `auth_mode` в конфиге, только вперёд; окно для старых — только админ, ≤ 7 дней, само закрывается | `enforcement_is_a_ratchet`, `deadline_enforces_and_never_reverts`, `legacy_window_expires_by_itself`, `forged_tunnel_id_does_not_downgrade`, `mixed_network_old_keyed_new` |
+| 009: захват адреса | `pin_from_hello` верил `h.url`: держатель секрета закреплял свой ключ за чужим ещё не обновлённым адресом | Адрес подтверждает ключ (подписанный ping); `tunnel:` — только токен/поручительство/админ | `url_hijack_before_upgrade_is_refused` (падает, если отключить проверку — проверено) |
+| 009: смена ключа | Другой ключ без подписи молча отбрасывался; сосед, пропустивший две смены, не мог вернуться | Конфликт ждёт админа; свежий токен заменяет потерянный ключ; цепочка до 8 шагов; пройденные id не возвращаются | `key_change_without_signature_goes_pending_conflict`, `admit_token_recovers_lost_key`, `rotation_chain_two_steps_offline_peer`, `retired_id_cannot_rotate_again` |
+| 009: роли | Соло-сервер реестра имён читал имена по секрету; три запасных варианта подписи пути | Роль `names`, только имена; только подписанный путь; соло закрепляется через names-hello | `names_role_cannot_read_users`, `solo_registry_requires_node_key_after_enforcement` |
+| 009: таблица повторов | Общая квота 200 000; очистка O(n) на каждый запрос при заполнении > 10 %; без fsync; после сбоя последние записи могли пропасть; два процесса при обновлении | Квота 50 000 на отправителя; очистка по индексу времени; fsync раз в секунду и при остановке; без метки чистой остановки подписи до старта отклоняются; блокировка файла | `per_sender_quota_isolates_a_flood`, `pruning_is_amortized`, `crash_without_clean_mark_refuses_older_signatures`, `clean_restart_keeps_working`, `a_second_process_waits_for_the_first` |
+| **AQUA-SEC-019** гонка конфигурации | Каждое изменение читало конфиг, меняло копию и писало обратно; параллельное закрепление ключа затёрло поручительство (тест `admission_impersonation_and_rejoining` падал ~1 из 4) | `update_cfg`: чтение, изменение, сохранение под одной блокировкой | 4 прогона подряд зелёные |
+| 010: курсоры | В памяти; курсор аккаунтов уходил вперёд при ошибке записи и медиа | `fed_cursors` в базе; не двигается при ошибке; медиа до записи аккаунта; resync | `cursors_persist_and_move_with_url`, `cursor_survives_restart` |
+| **AQUA-SEC-020** время изменений | Новый аккаунт получал «эта секунда + случайные мс» и мог встать раньше курсора соседа | Время локальных изменений строго растёт | `local_changes_get_increasing_times` |
+| 010: удаления | Удалённый аккаунт возвращался от сервера, не узнавшего об удалении | Подписанные надгробия, не больше 20 в час от узла автоматически | `tombstone_blocks_old_generation_but_not_reregistration`, `tombstone_blocks_name_registry_resurrection`, `signed_account_deletion_propagates_and_old_relay_cannot_resurrect`, `same_name_reregistered_after_deletion_keeps_it` |
+| 009: что принимаем | Строки ботов, `updated_at` из будущего, перехват e-mail, выдуманный старый `created_at` в реестре имён; `h_deliver`/`h_webapp_init` без проверки `from` | Отклоняются; переименование по реестру — только при одновременной регистрации (10 мин); `from` — известный незабаненный человек + лимит на узел (смягчение, не доказательство авторства) | `future_updated_at_is_refused`, `bot_rows_from_peers_are_refused`, `a_peer_row_cannot_take_another_accounts_email`, `a_forged_old_name_claim_does_not_rename_ours` |
+| 009: `aqpass` | Только HMAC секрета; nonce в памяти (после перезапуска пропуск работал снова) | v2: подпись ключом домашнего узла; при обязательных ключах без неё не принимается; nonce на диске | `aqpass_v2_accepted_by_old_and_new_solo` |

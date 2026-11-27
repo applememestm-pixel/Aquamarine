@@ -35,6 +35,7 @@ use std::{
 };
 
 use rand_core::{OsRng, RngCore};
+use rusqlite::OptionalExtension;
 use rusqlite::Connection;
 
 /// A code is valid for this long after it is issued.
@@ -309,6 +310,37 @@ pub struct NameRow {
     pub updated_at: i64,
 }
 
+/// How far ahead of our clock a peer's change time may be (ms).
+pub const FED_SKEW_MS: i64 = 5 * 60 * 1000;
+/// Two relays gave the same @name within this many seconds: the older
+/// account keeps it (later, a claim can't move an account of ours).
+pub const NAME_RACE_SECS: i64 = 10 * 60;
+
+/// An account deleted on its relay (A7): signed by that relay's node key
+/// over `aqua-fed-tomb-v1\n{uid}\n{username}\n{created_at}\n{deleted_at}\n{origin}`.
+/// It covers that generation of the account (`created_at`): a copy of it from
+/// a relay that didn't hear of the deletion isn't taken again; someone who
+/// signs up anew (later `created_at`) is.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Tomb {
+    pub uid: String,
+    pub created_at: i64,
+    pub username: String,
+    pub deleted_at: i64,
+    /// Node id of the relay that deleted it ("" — not in a network then).
+    pub origin: String,
+    pub sig: String,
+    /// When it came here (ms): the order it is handed on in.
+    #[serde(default)]
+    pub got_at: i64,
+}
+
+impl Tomb {
+    pub fn message(&self) -> String {
+        format!("aqua-fed-tomb-v1\n{}\n{}\n{}\n{}\n{}", self.uid, self.username, self.created_at, self.deleted_at, self.origin)
+    }
+}
+
 /// What applying a peer's account row did here.
 #[derive(Debug, Default, PartialEq)]
 pub struct FedApplied {
@@ -321,6 +353,9 @@ pub struct FedApplied {
     /// A sealed account's security fields came without a valid seal and
     /// were kept as they are here.
     pub refused_security: bool,
+    /// It couldn't be written (a database error, not a decision): the sync
+    /// cursor must not move past it.
+    pub failed: bool,
 }
 
 fn no_devices() -> String { "[]".into() }
@@ -664,6 +699,25 @@ impl Directory {
                 created_at     INTEGER NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+            CREATE TABLE IF NOT EXISTS fed_tombstones (
+                uid        TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                username   TEXT NOT NULL,
+                deleted_at INTEGER NOT NULL,
+                origin     TEXT NOT NULL,
+                sig        TEXT NOT NULL,
+                got_at     INTEGER NOT NULL,
+                PRIMARY KEY (uid, created_at)
+            );
+            CREATE INDEX IF NOT EXISTS idx_fed_tombs_got ON fed_tombstones(got_at);
+            CREATE TABLE IF NOT EXISTS fed_cursors (
+                peer   TEXT NOT NULL,
+                stream TEXT NOT NULL,
+                since  INTEGER NOT NULL,
+                after  TEXT NOT NULL DEFAULT '',
+                at     INTEGER NOT NULL,
+                PRIMARY KEY (peer, stream)
+            );
             CREATE TABLE IF NOT EXISTS email_codes (
                 email      TEXT PRIMARY KEY,
                 code       TEXT NOT NULL,
@@ -867,16 +921,27 @@ impl Directory {
             db.execute("DROP TABLE bot_tokens", [])?;
         }
         // Federation: every change to a user row bumps updated_at, so peers
-        // can pull "everything since T". A row applied from a peer carries
+        // can pull "everything since T". Each change gets a time after every
+        // other row's (1.21.0-25): with "this second + random ms" a row made
+        // in the same second could land before a peer's cursor (kept on disk
+        // now) and never be pulled. A row applied from a peer carries
         // its own updated_at and is left alone (WHEN clause).
+        // Triggers of a build before 1.21.0-25 ("this second + random ms")
+        // are replaced once, in one transaction: two processes opening the
+        // same file at once (a restart, tests) collided between DROP and CREATE.
+        let old_trigger = db.query_row("SELECT sql FROM sqlite_master WHERE type='trigger' AND name='users_touch_ins'", [], |r| r.get::<_, String>(0))
+            .map(|sql| !sql.contains("julianday")).unwrap_or(false);
+        if old_trigger {
+            db.execute_batch("BEGIN IMMEDIATE; DROP TRIGGER IF EXISTS users_touch_ins; DROP TRIGGER IF EXISTS users_touch_upd; COMMIT;")?;
+        }
         db.execute_batch(
             r#"
             CREATE TRIGGER IF NOT EXISTS users_touch_ins AFTER INSERT ON users
             WHEN NEW.updated_at = 0
-            BEGIN UPDATE users SET updated_at = CAST(strftime('%s','now') AS INTEGER) * 1000 + (abs(random()) % 1000) WHERE username = NEW.username; END;
+            BEGIN UPDATE users SET updated_at = max(CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER), (SELECT COALESCE(MAX(updated_at), 0) + 1 FROM users)) WHERE username = NEW.username; END;
             CREATE TRIGGER IF NOT EXISTS users_touch_upd AFTER UPDATE ON users
             WHEN NEW.updated_at = OLD.updated_at
-            BEGIN UPDATE users SET updated_at = max(OLD.updated_at + 1, CAST(strftime('%s','now') AS INTEGER) * 1000) WHERE username = NEW.username; END;
+            BEGIN UPDATE users SET updated_at = max(OLD.updated_at + 1, CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER), (SELECT COALESCE(MAX(updated_at), 0) + 1 FROM users)) WHERE username = NEW.username; END;
             CREATE INDEX IF NOT EXISTS idx_users_updated ON users(updated_at);
             CREATE INDEX IF NOT EXISTS idx_users_uid ON users(uid);
             "#,
@@ -934,7 +999,12 @@ impl Directory {
 
     pub fn open() -> anyhow::Result<Self> {
         let path = std::env::var("AQUA_DIR_DB").unwrap_or_else(|_| "aqua-directory.sqlite".into());
-        let db = Connection::open(&path)?;
+        Self::open_path(&path)
+    }
+
+    /// [`Self::open`] of a given file (tests: a restart with the same data).
+    pub fn open_path(path: &str) -> anyhow::Result<Self> {
+        let db = Connection::open(path)?;
         // Every message passes through the inbox table (stored, then deleted
         // on the device's "got it"), behind one lock shared by every request.
         // The default rollback journal syncs the disk several times per
@@ -1813,7 +1883,33 @@ impl Directory {
         if db.query_row("SELECT 1 FROM users WHERE uid=?1", rusqlite::params![n.uid], |_| Ok(())).is_ok() {
             return None;
         }
+        // A deleted account's name (A7): not taken again, and it holds no
+        // claim on the name against anyone here.
+        if Self::tombed(&db, &n.uid, n.created_at) {
+            return None;
+        }
         let home = if n.home.is_empty() { home } else { n.home.as_str() };
+        // A8: a claim on a name one of ours holds. An older claim renamed our
+        // account, and any relay of the registry could make one up ("created
+        // at 0"). A real older claim is known before a name is taken here
+        // (sign-up checks the registry), except when both were taken at
+        // nearly the same time on two relays: only then — both made within
+        // NAME_RACE_SECS of each other, ours not older than that — does the
+        // older one win. Otherwise ours keeps the name, and the claim isn't
+        // recorded (it would be handed on to the rest of the registry).
+        let holder: Option<(String, i64, i64)> = db
+            .query_row("SELECT uid, created_at, is_bot FROM users WHERE username=?1", rusqlite::params![name], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .ok();
+        if let Some((local_uid, local_created, bot)) = &holder {
+            let we_win = *bot != 0 || (*local_created, local_uid.as_str()) <= (n.created_at, n.uid.as_str());
+            let race = (local_created - n.created_at).abs() <= NAME_RACE_SECS && now_secs() as i64 - local_created <= NAME_RACE_SECS;
+            if we_win || !race {
+                if !we_win {
+                    tracing::warn!(%name, claim_uid = %n.uid, "name registry: an older claim on a name taken here — ours keeps it");
+                }
+                return None;
+            }
+        }
         // Renamed there: its old name is free again.
         let _ = db.execute("DELETE FROM fed_names WHERE uid=?1 AND username<>?2", rusqlite::params![n.uid, name]);
         let _ = db.execute(
@@ -1824,14 +1920,7 @@ impl Directory {
                 OR (excluded.created_at = fed_names.created_at AND excluded.uid < fed_names.uid)",
             rusqlite::params![name, n.uid, home, n.created_at, crate::now_ms()],
         );
-        let holder: Option<(String, i64, i64)> = db
-            .query_row("SELECT uid, created_at, is_bot FROM users WHERE username=?1", rusqlite::params![name], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
-            .ok();
-        let (local_uid, local_created, bot) = holder?;
-        let we_win = bot != 0 || (local_created, local_uid.as_str()) <= (n.created_at, n.uid.as_str());
-        if we_win {
-            return None;
-        }
+        let (local_uid, _, _) = holder?;
         let to = Self::displaced_name(&db, &name, &local_uid);
         if Self::move_account(&mut db, &name, &to, false).is_err() {
             return None;
@@ -2524,9 +2613,27 @@ impl Directory {
     /// both accounts stay: the older one keeps the name, the newer one gets
     /// `name_1234` on every relay and its owner picks a new name.
     pub fn fed_apply_user(&self, u: &FedUser) -> FedApplied {
+        self.fed_apply_user_from(u, "")
+    }
+
+    /// [`Self::fed_apply_user`] for a row pulled from the relay with node id
+    /// `origin` ("" when not known by key).
+    pub fn fed_apply_user_from(&self, u: &FedUser, origin: &str) -> FedApplied {
         let mut out = FedApplied::default();
         let Ok(dh) = hex::decode(&u.identity_dh) else { return out };
         if dh.len() != 32 || !Self::valid_username(&u.username) {
+            return out;
+        }
+        // A8: bots aren't accounts relays exchange (a peer could make one
+        // and take a name the bot rules keep); a row "changed in the future"
+        // would stay newer than every real change here (the update trigger
+        // only counts up from it) — both refused.
+        if u.is_bot {
+            tracing::warn!(user = %u.username, %origin, "federation: a bot account from a peer — refused");
+            return out;
+        }
+        if u.updated_at > crate::now_ms() + FED_SKEW_MS {
+            tracing::warn!(user = %u.username, %origin, "federation: an account changed in the future — refused");
             return out;
         }
         let uid = if u.uid.len() == 10 && u.uid.bytes().all(|b| b.is_ascii_digit()) { u.uid.clone() } else { uid_for(&dh) };
@@ -2535,6 +2642,11 @@ impl Directory {
             return out;
         }
         let mut db = self.db.lock().unwrap();
+        // Deleted (a tombstone of this generation, A7): a relay that didn't
+        // hear of it doesn't bring it back. A later sign-up is another one.
+        if Self::tombed(&db, &uid, u.created_at) {
+            return out;
+        }
         // This account here, under whatever name.
         let mine: Option<(String, i64)> = db
             .query_row("SELECT username, updated_at FROM users WHERE uid=?1 AND is_bot=0", rusqlite::params![uid], |r| Ok((r.get(0)?, r.get(1)?)))
@@ -2565,6 +2677,7 @@ impl Directory {
                 // Ours must move: rename it everywhere it's stored here.
                 let to = Self::displaced_name(&db, &u.username, &their_uid);
                 if Self::move_account(&mut db, &u.username, &to, false).is_err() {
+                    out.failed = true;
                     return out;
                 }
                 tracing::warn!(user = %u.username, %to, "federation: an older account from a peer has this name — ours is renamed");
@@ -2587,7 +2700,7 @@ impl Directory {
         let renamed: Vec<String> = {
             let mut st = match db.prepare("SELECT username FROM users WHERE identity_dh=?1 AND username<>?2 AND is_bot=0 AND uid=?3") {
                 Ok(st) => st,
-                Err(_) => return out,
+                Err(_) => { out.failed = true; return out }
             };
             st.query_map(rusqlite::params![dh, name, uid], |r| r.get::<_, String>(0))
                 .map(|rows| rows.flatten().collect())
@@ -2596,9 +2709,21 @@ impl Directory {
         for old in renamed {
             let _ = db.execute("DELETE FROM users WHERE username=?1", rusqlite::params![old]);
         }
-        // An e-mail moving to another username elsewhere: drop it here first.
-        if let Some(email) = &u.email {
-            let _ = db.execute("UPDATE users SET email=NULL WHERE email=?1 AND username<>?2", rusqlite::params![email, name]);
+        // An e-mail moving to another username elsewhere (a rename of this
+        // same account): drop it from the old row first. A8: an e-mail that
+        // belongs to ANOTHER account here (another ID) stays with it — a row
+        // from a peer took it over before, and with it sign-in by code and
+        // password reset of that account. The incoming row goes without it.
+        let mut u = u.clone();
+        if let Some(email) = u.email.clone() {
+            let other: Option<String> = db.query_row("SELECT uid FROM users WHERE email=?1 AND username<>?2", rusqlite::params![email, name], |r| r.get(0)).ok();
+            match other {
+                Some(o) if o != uid && !o.is_empty() => {
+                    tracing::warn!(user = %u.username, %origin, "federation: a peer's account names an e-mail of another account here — not taken");
+                    u.email = None;
+                }
+                _ => { let _ = db.execute("UPDATE users SET email=NULL WHERE email=?1 AND username<>?2", rusqlite::params![email, name]); }
+            }
         }
         // A sealed account: its security fields change only with a seal by a
         // device it already had (see `Seal`). Otherwise they stay as they are
@@ -2608,7 +2733,6 @@ impl Directory {
             rusqlite::params![uid],
             |r| Ok(LocalSec { identity_dh: hex::encode(r.get::<_, Vec<u8>>(0)?), password: r.get(1)?, security: r.get(2)?, devices: r.get(3)?, recovery: r.get(4)?, devlist: r.get(5)?, seal: r.get(6)? }),
         ).ok();
-        let mut u = u.clone();
         let mut dh = dh;
         if let Some(l) = local.as_ref().filter(|l| !l.seal.is_empty()) {
             // Older relays send '' for fields they don't know: "keep ours".
@@ -2648,6 +2772,7 @@ impl Directory {
                 u.extra, u.avatar_ver, u.banner_ver, u.media_acl, u.password, u.music_ver, u.updated_at, u.devices, u.recovery, uid, u.security, u.devlist, u.seal],
         )
         .is_ok();
+        out.failed = !out.applied;
         out
     }
 
@@ -2758,23 +2883,129 @@ impl Directory {
     }
 
     /// Federation: a peer's record, if newer than ours (it gets a new local seq).
-    pub fn fed_apply_hist(&self, username: &str, k: &str, data: &[u8], updated_at: i64) -> bool {
+    /// Is this generation of account `uid` (created at `created_at`) deleted?
+    fn tombed(db: &Connection, uid: &str, created_at: i64) -> bool {
+        db.query_row("SELECT 1 FROM fed_tombstones WHERE uid=?1 AND created_at>=?2 LIMIT 1", rusqlite::params![uid, created_at], |_| Ok(()))
+            .is_ok()
+    }
+
+    /// `(uid, created_at)` of a person's account here (for its tombstone).
+    pub fn account_generation(&self, username: &str) -> Option<(String, i64)> {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        db.query_row("SELECT uid, created_at FROM users WHERE username=?1 AND is_bot=0", rusqlite::params![username], |r| Ok((r.get(0)?, r.get(1)?))).ok()
+    }
+
+    /// Keep a tombstone. Ok(true) when it is new here.
+    pub fn add_tomb(&self, t: &Tomb) -> rusqlite::Result<bool> {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let n = db.execute(
+            "INSERT OR IGNORE INTO fed_tombstones (uid, created_at, username, deleted_at, origin, sig, got_at) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+            rusqlite::params![t.uid, t.created_at, t.username, t.deleted_at, t.origin, t.sig, crate::now_ms()],
+        )?;
+        Ok(n > 0)
+    }
+
+    /// A tombstone from the network (signature checked by the caller): kept,
+    /// and the generation it covers removed here — the account (if this one
+    /// is that generation or older) and its name in the registry. Returns
+    /// the @name removed here, if any. Taking it twice changes nothing.
+    pub fn apply_tomb(&self, t: &Tomb) -> rusqlite::Result<Option<String>> {
+        if !self.add_tomb(t)? {
+            return Ok(None);
+        }
+        let local: Option<String> = {
+            let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+            let _ = db.execute("DELETE FROM fed_names WHERE uid=?1 AND created_at<=?2", rusqlite::params![t.uid, t.created_at]);
+            db.query_row("SELECT username FROM users WHERE uid=?1 AND is_bot=0 AND created_at<=?2", rusqlite::params![t.uid, t.created_at], |r| r.get(0)).optional()?
+        };
+        Ok(local.filter(|n| self.delete_person(n)))
+    }
+
+    /// Tombstones after the cursor `(got_at, "uid:created_at")`, in the
+    /// order they came here — ours and those handed on to us.
+    pub fn tombs_after(&self, since: i64, after: Option<&str>, limit: usize) -> Vec<Tomb> {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let Ok(mut st) = db.prepare(
+            "SELECT uid, created_at, username, deleted_at, origin, sig, got_at FROM fed_tombstones
+             WHERE sig <> '' AND (got_at > ?1 OR (?2 IS NOT NULL AND got_at = ?1 AND (uid || ':' || created_at) > ?2))
+             ORDER BY got_at, uid || ':' || created_at LIMIT ?3",
+        ) else { return Vec::new() };
+        st.query_map(rusqlite::params![since, after, limit as i64], |r| Ok(Tomb {
+            uid: r.get(0)?, created_at: r.get(1)?, username: r.get(2)?, deleted_at: r.get(3)?, origin: r.get(4)?, sig: r.get(5)?, got_at: r.get(6)?,
+        })).map(|it| it.filter_map(Result::ok).collect()).unwrap_or_default()
+    }
+
+    /// How many tombstones signed by `origin` came here since `since_ms`.
+    pub fn tombs_from_since(&self, origin: &str, since_ms: i64) -> usize {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        db.query_row("SELECT COUNT(*) FROM fed_tombstones WHERE origin=?1 AND got_at>?2", rusqlite::params![origin, since_ms], |r| r.get::<_, i64>(0))
+            .unwrap_or(0) as usize
+    }
+
+    /// Is the account with ID `uid` deleted, with no later sign-up of it
+    /// known (in the name registry)? A pass for it isn't taken.
+    pub fn uid_deleted(&self, uid: &str) -> bool {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let Ok(t) = db.query_row("SELECT MAX(created_at) FROM fed_tombstones WHERE uid=?1", rusqlite::params![uid], |r| r.get::<_, Option<i64>>(0)) else { return false };
+        let Some(t) = t else { return false };
+        let later = db.query_row("SELECT 1 FROM fed_names WHERE uid=?1 AND created_at>?2", rusqlite::params![uid, t], |_| Ok(())).is_ok()
+            || db.query_row("SELECT 1 FROM users WHERE uid=?1 AND created_at>?2", rusqlite::params![uid, t], |_| Ok(())).is_ok();
+        !later
+    }
+
+    /// Where federation sync is in `peer`'s `stream` (users, backups, hist,
+    /// names, tombs): `(since, after)`. Kept on disk, so a restart doesn't
+    /// pull everything again from the start (A6).
+    pub fn fed_cursor(&self, peer: &str, stream: &str) -> Option<(i64, String)> {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        db.query_row("SELECT since, after FROM fed_cursors WHERE peer=?1 AND stream=?2", rusqlite::params![peer, stream], |r| Ok((r.get(0)?, r.get(1)?))).ok()
+    }
+
+    /// Keep where sync is in `peer`'s `stream`. False when it couldn't be
+    /// written (the caller doesn't go on as if it were).
+    pub fn set_fed_cursor(&self, peer: &str, stream: &str, since: i64, after: &str) -> bool {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        db.execute(
+            "INSERT INTO fed_cursors(peer, stream, since, after, at) VALUES(?1,?2,?3,?4,?5)
+             ON CONFLICT(peer, stream) DO UPDATE SET since=excluded.since, after=excluded.after, at=excluded.at",
+            rusqlite::params![peer, stream, since, after, now_secs() as i64],
+        ).is_ok()
+    }
+
+    /// A peer moved to a new address (same key): its cursors go with it.
+    pub fn fed_cursors_move(&self, from: &str, to: &str) {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = db.execute("DELETE FROM fed_cursors WHERE peer=?1", rusqlite::params![to]);
+        let _ = db.execute("UPDATE fed_cursors SET peer=?2 WHERE peer=?1", rusqlite::params![from, to]);
+    }
+
+    /// Forget where sync is with `peer` (revoked; or the admin's resync):
+    /// all of it, or one stream.
+    pub fn fed_cursors_drop(&self, peer: Option<&str>, stream: Option<&str>) {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = db.execute(
+            "DELETE FROM fed_cursors WHERE (?1 IS NULL OR peer=?1) AND (?2 IS NULL OR stream=?2)",
+            rusqlite::params![peer, stream],
+        );
+    }
+
+    /// Ok(true): taken; Ok(false): ours is as new; Err: couldn't be written.
+    pub fn fed_apply_hist(&self, username: &str, k: &str, data: &[u8], updated_at: i64) -> rusqlite::Result<bool> {
         let db = self.db.lock().unwrap();
         let ours: Option<i64> = db
             .query_row("SELECT updated_at FROM hist_store WHERE username=?1 AND k=?2", rusqlite::params![username, k], |r| r.get(0))
-            .ok();
+            .optional()?;
         if ours.is_some_and(|t| t >= updated_at) {
-            return false;
+            return Ok(false);
         }
         let seq: i64 = db
-            .query_row("SELECT COALESCE(MAX(seq), 0) + 1 FROM hist_store WHERE username=?1", rusqlite::params![username], |r| r.get(0))
-            .unwrap_or(1);
+            .query_row("SELECT COALESCE(MAX(seq), 0) + 1 FROM hist_store WHERE username=?1", rusqlite::params![username], |r| r.get(0))?;
         db.execute(
             "INSERT INTO hist_store (username, k, seq, data, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(username, k) DO UPDATE SET seq=?3, data=?4, updated_at=?5",
             rusqlite::params![username, k, seq, data, updated_at],
-        )
-        .is_ok()
+        )?;
+        Ok(true)
     }
 
     /// (username, updated_at) of backups changed after `since` (seconds).
@@ -2796,20 +3027,21 @@ impl Directory {
     }
 
     /// Store a peer's backup if it is newer than ours.
-    pub fn fed_apply_backup(&self, username: &str, data: &[u8], updated_at: i64) -> bool {
+    /// Ok(true): taken; Ok(false): ours is as new; Err: couldn't be written.
+    pub fn fed_apply_backup(&self, username: &str, data: &[u8], updated_at: i64) -> rusqlite::Result<bool> {
         let db = self.db.lock().unwrap();
         let ours: Option<i64> = db
             .query_row("SELECT updated_at FROM backups WHERE username=?1", rusqlite::params![username], |r| r.get(0))
-            .ok();
+            .optional()?;
         if ours.is_some_and(|t| t >= updated_at) {
-            return false;
+            return Ok(false);
         }
         db.execute(
             "INSERT INTO backups (username, data, updated_at) VALUES (?1, ?2, ?3)
              ON CONFLICT(username) DO UPDATE SET data=?2, updated_at=?3",
             rusqlite::params![username, data, updated_at],
-        )
-        .is_ok()
+        )?;
+        Ok(true)
     }
 
     /// Something to compare: (newest account change, newest backup). When
@@ -2854,12 +3086,23 @@ impl Directory {
     }
 
     /// Store a profile image / track fetched from a peer.
-    pub fn fed_store_media(&self, username: &str, kind: MediaKind, mime: &str, data: &[u8]) {
+    pub fn fed_store_media(&self, username: &str, kind: MediaKind, mime: &str, data: &[u8]) -> bool {
         let db = self.db.lock().unwrap();
-        let _ = db.execute(
+        db.execute(
             "INSERT INTO profile_media (username, kind, mime, data) VALUES (?1, ?2, ?3, ?4)
              ON CONFLICT(username, kind) DO UPDATE SET mime=?3, data=?4",
             rusqlite::params![username, kind.as_str(), mime, data],
+        ).is_ok()
+    }
+
+    /// An account from a peer is in, its media couldn't be written: put our
+    /// media versions back and make the row a moment older, so the next
+    /// round takes the row — and fetches the media — again.
+    pub fn fed_media_unset(&self, username: &str, versions: (i64, i64, i64)) {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = db.execute(
+            "UPDATE users SET avatar_ver=?2, banner_ver=?3, music_ver=?4, updated_at=updated_at-1 WHERE username=?1",
+            rusqlite::params![username, versions.0, versions.1, versions.2],
         );
     }
 
@@ -3220,6 +3463,21 @@ impl Directory {
         st.query_map([], |r| Ok(serde_json::json!({ "uid": r.get::<_, String>(0)?, "username": r.get::<_, String>(1)?, "at": r.get::<_, i64>(2)? })))
             .map(|it| it.filter_map(|x| x.ok()).collect())
             .unwrap_or_default()
+    }
+
+    /// Can `username` (a person of the network: an account row here, local
+    /// or copied) send through a peer? Not unknown, not banned, not a bot
+    /// (A8: a relay of the network named any sender it liked).
+    pub fn may_send_from_peer(&self, username: &str) -> bool {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let row: Option<(String, Vec<u8>, i64)> = db
+            .query_row("SELECT uid, identity_dh, is_bot FROM users WHERE username=?1", rusqlite::params![username], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .ok();
+        drop(db);
+        match row {
+            Some((uid, dh, 0)) => !self.is_banned_uid(&uid) && !self.is_banned_dh(&dh),
+            _ => false,
+        }
     }
 
     /// Ban `username` (a person, not a bot): its ID and every identity key it
@@ -3848,6 +4106,202 @@ mod tests {
 
     fn dir() -> Directory { Directory::open_memory() }
 
+    fn peer_user(name: &str, uid: &str, created_at: i64, updated_at: i64) -> FedUser {
+        let dh = aqua_core::keys::IdentityKeyPair::generate();
+        FedUser {
+            username: name.into(), identity_dh: hex::encode(dh.public().dh_pub.as_bytes()), email: None, display_name: name.into(),
+            about: String::new(), phone: String::new(), is_bot: false, created_at, extra: String::new(), avatar_ver: 0, banner_ver: 0,
+            media_acl: String::new(), password: String::new(), music_ver: 0, updated_at, devices: "[]".into(), recovery: String::new(),
+            uid: uid.into(), security: String::new(), devlist: String::new(), seal: String::new(),
+        }
+    }
+    fn tomb(uid: &str, name: &str, created_at: i64) -> Tomb {
+        Tomb { uid: uid.into(), created_at, username: name.into(), deleted_at: created_at + 100, origin: "o".into(), sig: "s".into(), got_at: 0 }
+    }
+
+    /// A7: a tombstone covers the generation it names: a copy of that
+    /// account (or an older one) from a relay that didn't hear of the
+    /// deletion isn't taken again; a later sign-up with the same ID is.
+    #[test]
+    fn tombstone_blocks_old_generation_but_not_reregistration() {
+        let d = dir();
+        let u = peer_user("gone", "1000000001", 1000, 5000);
+        assert!(d.fed_apply_user(&u).applied);
+        assert_eq!(d.apply_tomb(&tomb("1000000001", "gone", 1000)).unwrap().as_deref(), Some("gone"), "deleted here");
+        assert!(d.identity_for("gone").is_none());
+        assert_eq!(d.apply_tomb(&tomb("1000000001", "gone", 1000)).unwrap(), None, "twice: nothing more");
+        // An old relay sends it again, even "changed later".
+        let again = FedUser { updated_at: 9_000, ..u.clone() };
+        let r = d.fed_apply_user(&again);
+        assert!(!r.applied && !r.failed, "not taken, and not an error (the cursor moves on)");
+        assert!(d.identity_for("gone").is_none());
+        // A new sign-up (same ID, later creation): taken.
+        let new = FedUser { created_at: 2000, updated_at: 9_500, ..peer_user("gone", "1000000001", 2000, 9_500) };
+        assert!(d.fed_apply_user(&new).applied);
+        assert!(d.identity_for("gone").is_some());
+        assert!(!d.uid_deleted("1000000001"), "signed up again: a pass for it works");
+        assert!(d.uid_deleted("1000000009") == false);
+        d.add_tomb(&tomb("1000000009", "x", 10)).unwrap();
+        assert!(d.uid_deleted("1000000009"));
+    }
+
+    /// A7: a deleted account's name from the registry isn't taken again and
+    /// claims nothing against a local account with that name.
+    #[test]
+    fn tombstone_blocks_name_registry_resurrection() {
+        let d = dir();
+        let row = NameRow { username: "taken".into(), uid: "2000000001".into(), home: "http://old".into(), created_at: 100, updated_at: 200 };
+        d.fed_apply_name(&row, "http://old");
+        assert!(d.names_after(0, None, 10).iter().any(|r| r.username == "taken"));
+        d.apply_tomb(&tomb("2000000001", "taken", 100)).unwrap();
+        assert!(!d.names_after(0, None, 10).iter().any(|r| r.uid == "2000000001"), "gone from the registry");
+        d.fed_apply_name(&row, "http://old");
+        assert!(!d.names_after(0, None, 10).iter().any(|r| r.uid == "2000000001"), "an old relay can't bring it back");
+        // Someone here takes the name later; the old (deleted, older) one doesn't move them.
+        let mine = peer_user("taken", "2000000002", 500, 600);
+        assert!(d.fed_apply_user(&mine).applied);
+        assert_eq!(d.fed_apply_name(&row, "http://old"), None);
+        assert!(d.identity_for("taken").is_some());
+    }
+
+    /// Several processes open one database with the triggers of an older
+    /// build at once (a restart, the tests): each opens, the new triggers
+    /// end up in place (CI caught "trigger already exists").
+    #[test]
+    fn old_triggers_are_replaced_by_many_openers_at_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("d.sqlite").to_string_lossy().to_string();
+        drop(Directory::open_path(&path).unwrap());
+        {
+            let c = Connection::open(&path).unwrap();
+            c.execute_batch("DROP TRIGGER users_touch_ins; DROP TRIGGER users_touch_upd;
+                CREATE TRIGGER users_touch_ins AFTER INSERT ON users WHEN NEW.updated_at = 0
+                BEGIN UPDATE users SET updated_at = CAST(strftime('%s','now') AS INTEGER) * 1000 + (abs(random()) % 1000) WHERE username = NEW.username; END;
+                CREATE TRIGGER users_touch_upd AFTER UPDATE ON users WHEN NEW.updated_at = OLD.updated_at
+                BEGIN UPDATE users SET updated_at = max(OLD.updated_at + 1, CAST(strftime('%s','now') AS INTEGER) * 1000) WHERE username = NEW.username; END;").unwrap();
+        }
+        let threads: Vec<_> = (0..8).map(|_| { let p = path.clone(); std::thread::spawn(move || Directory::open_path(&p).map(|_| ()).map_err(|e| e.to_string())) }).collect();
+        for t in threads { t.join().unwrap().unwrap(); }
+        let c = Connection::open(&path).unwrap();
+        for name in ["users_touch_ins", "users_touch_upd"] {
+            let sql: String = c.query_row("SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?1", [name], |r| r.get(0)).unwrap();
+            assert!(sql.contains("julianday"), "{name}: {sql}");
+        }
+    }
+
+    /// Rows made here one after another get increasing change times: one
+    /// made in the same second used to get a random millisecond, could land
+    /// before a peer's cursor and was never pulled.
+    #[test]
+    fn local_changes_get_increasing_times() {
+        let d = dir();
+        let db = d.db.lock().unwrap();
+        let mut last = 0i64;
+        for i in 0..200 {
+            db.execute("INSERT INTO users (username, identity_dh, created_at) VALUES (?1, ?2, 1)", rusqlite::params![format!("n{i}"), vec![i as u8; 32]]).unwrap();
+            let t: i64 = db.query_row("SELECT updated_at FROM users WHERE username=?1", rusqlite::params![format!("n{i}")], |r| r.get(0)).unwrap();
+            assert!(t > last, "{i}: {t} after {last}");
+            last = t;
+        }
+        db.execute("UPDATE users SET display_name='x' WHERE username='n0'", []).unwrap();
+        let t: i64 = db.query_row("SELECT updated_at FROM users WHERE username='n0'", [], |r| r.get(0)).unwrap();
+        assert!(t > last, "an update of an old row comes after the rest too");
+    }
+
+    /// A8: a peer's row "changed in the future" is refused (it would stay
+    /// newer than every real change here).
+    #[test]
+    fn future_updated_at_is_refused() {
+        let d = dir();
+        let now = crate::now_ms();
+        let r = d.fed_apply_user(&peer_user("tomorrow", "3000000001", 1, now + 24 * 3600 * 1000));
+        assert!(!r.applied && !r.failed);
+        assert!(d.identity_for("tomorrow").is_none());
+        assert!(d.fed_apply_user(&peer_user("today", "3000000002", 1, now + 1000)).applied, "a little clock skew is fine");
+    }
+
+    /// A8: relays don't hand bots to each other as accounts.
+    #[test]
+    fn bot_rows_from_peers_are_refused() {
+        let d = dir();
+        let mut u = peer_user("fakebot", "3000000003", 1, crate::now_ms());
+        u.is_bot = true;
+        let r = d.fed_apply_user(&u);
+        assert!(!r.applied && !r.failed);
+        assert!(d.identity_for("fakebot").is_none());
+    }
+
+    /// A8: a peer's row can't take over the e-mail of another account here
+    /// (sign-in by code and password reset go by e-mail); a rename of the
+    /// same account still moves it.
+    #[test]
+    fn a_peer_row_cannot_take_another_accounts_email() {
+        let d = dir();
+        let mut mine = peer_user("owner", "3000000004", 1, crate::now_ms() - 10_000);
+        mine.email = Some("owner@x.com".into());
+        assert!(d.fed_apply_user(&mine).applied);
+        let mut thief = peer_user("thief", "3000000005", 1, crate::now_ms());
+        thief.email = Some("owner@x.com".into());
+        assert!(d.fed_apply_user(&thief).applied);
+        assert_eq!(d.email_of("owner").as_deref(), Some("owner@x.com"), "stays with its account");
+        assert_eq!(d.email_of("thief"), None);
+        // The same account renamed on its relay: the e-mail goes with it.
+        let mut renamed = mine.clone();
+        renamed.username = "owner2".into();
+        renamed.updated_at = crate::now_ms();
+        assert!(d.fed_apply_user(&renamed).applied);
+        assert_eq!(d.email_of("owner2").as_deref(), Some("owner@x.com"));
+    }
+
+    /// A8: a made-up registry claim with an old creation time doesn't rename
+    /// an account taken here long ago (only a near-simultaneous one).
+    #[test]
+    fn a_forged_old_name_claim_does_not_rename_ours() {
+        let d = dir();
+        let now = now_secs() as i64;
+        let mine = peer_user("longtime", "3000000006", now - 3600, crate::now_ms() - 1000);
+        assert!(d.fed_apply_user(&mine).applied);
+        let claim = NameRow { username: "longtime".into(), uid: "3000000007".into(), home: "http://evil".into(), created_at: 0, updated_at: 1 };
+        assert_eq!(d.fed_apply_name(&claim, "http://evil"), None);
+        assert!(d.identity_for("longtime").is_some(), "ours keeps it");
+        // Taken on two relays at about the same time: the older one wins, as before.
+        let fresh = peer_user("racename", "3000000008", now - 5, crate::now_ms() - 1000);
+        assert!(d.fed_apply_user(&fresh).applied);
+        let older = NameRow { username: "racename".into(), uid: "3000000009".into(), home: "http://b".into(), created_at: now - 30, updated_at: 1 };
+        assert!(d.fed_apply_name(&older, "http://b").is_some(), "near-simultaneous: the older wins");
+        // A claim far older than a fresh account of ours isn't a race.
+        let fresh2 = peer_user("fresh2", "3000000010", now - 5, crate::now_ms() - 1000);
+        assert!(d.fed_apply_user(&fresh2).applied);
+        let forged = NameRow { username: "fresh2".into(), uid: "3000000011".into(), home: "http://evil".into(), created_at: 0, updated_at: 1 };
+        assert_eq!(d.fed_apply_name(&forged, "http://evil"), None);
+        assert!(!d.names_after(0, None, 100).iter().any(|r| r.uid == "3000000011"), "and not recorded to be handed on");
+    }
+
+    /// A6: where sync is with a peer survives a restart (same file), moves
+    /// with the peer's address and is dropped on request.
+    #[test]
+    fn cursors_persist_and_move_with_url() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("d.sqlite").to_string_lossy().to_string();
+        {
+            let d = Directory::open_path(&path).unwrap();
+            assert!(d.fed_cursor("http://a", "users").is_none());
+            assert!(d.set_fed_cursor("http://a", "users", 5, "bob"));
+            assert!(d.set_fed_cursor("http://a", "hist", 7, "bob/k"));
+            assert!(d.set_fed_cursor("http://a", "users", 9, "carol"));
+        }
+        let d = Directory::open_path(&path).unwrap();
+        assert_eq!(d.fed_cursor("http://a", "users"), Some((9, "carol".into())), "after a restart");
+        d.fed_cursors_move("http://a", "http://a2");
+        assert!(d.fed_cursor("http://a", "users").is_none());
+        assert_eq!(d.fed_cursor("http://a2", "hist"), Some((7, "bob/k".into())));
+        d.fed_cursors_drop(Some("http://a2"), Some("hist"));
+        assert!(d.fed_cursor("http://a2", "hist").is_none());
+        assert!(d.fed_cursor("http://a2", "users").is_some());
+        d.fed_cursors_drop(None, None);
+        assert!(d.fed_cursor("http://a2", "users").is_none());
+    }
+
     /// AQUA-SEC-011: a flooded inbox keeps the newest INBOX_MAX_ROWS.
     #[test]
     fn inbox_keeps_the_newest_when_full() {
@@ -4040,8 +4494,8 @@ mod tests {
         assert_eq!(d.hist_get("vlad", "a1").as_deref(), Some(&b"page v2"[..]));
         assert!(d.hist_list("ann", 0, 100).is_empty(), "per account");
         // Federation: a newer copy comes in with a fresh local seq.
-        assert!(d.fed_apply_hist("vlad", "b2", b"meta v2", crate::now_ms() + 1000));
-        assert!(!d.fed_apply_hist("vlad", "b2", b"old", 1));
+        assert!(d.fed_apply_hist("vlad", "b2", b"meta v2", crate::now_ms() + 1000).unwrap());
+        assert!(!d.fed_apply_hist("vlad", "b2", b"old", 1).unwrap());
         assert_eq!(d.hist_list("vlad", 4, 100)[0].0, "b2");
     }
 

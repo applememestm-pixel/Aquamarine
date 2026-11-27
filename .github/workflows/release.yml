@@ -380,6 +380,10 @@ jobs:
           mkdir -p gen/android/app/src/main/res/xml
           cp android/netsec.xml gen/android/app/src/main/res/xml/network_security_config.xml
           sed -i '0,/<application/s##<application android:networkSecurityConfig="@xml/network_security_config"#' "$m"
+          # Nothing of the app (admin token, keys) in Android's backup.
+          cp ../../android/backup/backup_rules.xml ../../android/backup/data_extraction_rules.xml gen/android/app/src/main/res/xml/
+          sed -i '0,/<application/s##<application android:allowBackup="false" android:fullBackupContent="@xml/backup_rules" android:dataExtractionRules="@xml/data_extraction_rules"#' "$m"
+          grep -q 'android:allowBackup="false"' "$m"
           grep -n 'AquaServerService\|FOREGROUND\|networkSecurityConfig' "$m"
 
       - name: Build APK
@@ -540,6 +544,10 @@ jobs:
           mkdir -p gen/android/app/src/main/res/xml
           cp ../../android/netsec/release.xml gen/android/app/src/main/res/xml/network_security_config.xml
           sed -i '0,/<application/s##<application android:networkSecurityConfig="@xml/network_security_config"#' "$m"
+          # Nothing of the app (keys, sessions, the vault) in Android's backup.
+          cp ../../android/backup/backup_rules.xml ../../android/backup/data_extraction_rules.xml gen/android/app/src/main/res/xml/
+          sed -i '0,/<application/s##<application android:allowBackup="false" android:fullBackupContent="@xml/backup_rules" android:dataExtractionRules="@xml/data_extraction_rules"#' "$m"
+          grep -q 'android:allowBackup="false"' "$m"
           grep -n networkSecurityConfig "$m"
 
       - name: Build APK

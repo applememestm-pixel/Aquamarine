@@ -44,6 +44,18 @@ if ($mt -notmatch 'networkSecurityConfig') {
   Write-Host '[patch] network security config (loopback media server)'
 }
 
+# 1f. Nothing of the app in Android's backup or phone-to-phone copy
+#     (keys, sessions, the vault).
+foreach ($f in @('backup_rules.xml', 'data_extraction_rules.xml')) {
+  Copy-Item (Join-Path $PSScriptRoot "backup\$f") (Join-Path $xmlMain $f) -Force
+}
+$mt = [IO.File]::ReadAllText($m)
+if ($mt -notmatch 'dataExtractionRules') {
+  $mt = $mt -replace '<application', '<application android:allowBackup="false" android:fullBackupContent="@xml/backup_rules" android:dataExtractionRules="@xml/data_extraction_rules"'
+  [IO.File]::WriteAllText($m, $mt)
+  Write-Host '[patch] Android backup excluded'
+}
+
 # 1c. MainActivity that asks for local-network access on Android 17+.
 $x = [IO.File]::ReadAllText($m)
 foreach ($permission in @('ACCESS_NETWORK_STATE', 'BLUETOOTH_ADVERTISE')) {
