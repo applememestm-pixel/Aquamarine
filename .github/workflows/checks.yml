@@ -142,6 +142,8 @@ jobs:
         run: python3 tools/check_android.py
       - name: the site script installs only a signed release (AQUA-SEC-012)
         run: bash tools/site-verify-test.sh
+      - name: updates.json lists only finished, signed releases
+        run: python3 tools/updates_feed_test.py
       - name: cargo check + unit tests (desktop app)
         working-directory: crates/aqua-client-ui
         run: |

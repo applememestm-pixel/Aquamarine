@@ -1023,3 +1023,6 @@ jobs:
           fi
           bash "$GITHUB_WORKSPACE/tools/release-sign.sh" sign ../SHA256SUMS.txt ../SHA256SUMS.txt.sig
           gh release upload "$TAG" ../SHA256SUMS.txt.sig --repo "$GITHUB_REPOSITORY" --clobber
+          # The site's updates.json lists a release only once it is signed
+          # (tools/updates_feed.py): build it again now, not at the next run.
+          gh workflow run pages.yml --repo "$GITHUB_REPOSITORY" --ref main || echo "::warning::pages.yml not started — updates.json gets this release at its next run"
