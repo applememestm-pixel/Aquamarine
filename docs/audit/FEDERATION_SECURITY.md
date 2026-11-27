@@ -38,7 +38,10 @@
 ## Повтор (`replay.rs`)
 - Подпись принимается один раз. v2-запрос расходует и свою `x-aqua-fed` (раньше её можно было повторить, сняв `x-aqua-fed2`).
 - Квота 50 000 на отправителя (id узла; все держатели секрета — один отправитель), всего 400 000. Очистка по индексу времени — каждая запись просматривается один раз.
-- Файл синхронизируется раз в секунду и при чистой остановке (Ctrl+C, стоп в панели, самообновление, перезапуск), которая оставляет метку `.clean`. Старт без метки (сбой, отключение питания, старая версия) не принимает подписи, сделанные до старта.
+- Файл синхронизируется раз в секунду и при чистой остановке (Ctrl+C, стоп в панели, самообновление, перезапуск), которая оставляет метку `.clean`. Записи со штампом дальше окна часов (пропуски — до 11 минут вперёд) синхронизируются до того, как запрос принят.
+- Нижняя граница (`floor`) только растёт и хранится в файле (строка `floor:`): каждая запись, удалённая как истёкшая, поднимает её выше своего штампа. Часы ушли вперёд, запись удалилась, часы вернулись (с перезапуском между этим или без) — подпись всё равно не принимается. Подписи со штампом дальше 15 минут вперёд не принимаются.
+- Старт без метки (сбой, отключение питания, старая версия): граница — старт + 5 минут (окно часов). Потерянной могла быть только несинхронизированная запись, а её штамп не дальше окна вперёд. **Цена: после сбоя федерация отказывает 5 минут**, соседи повторяют. Повреждённая строка в середине файла — старт + 15 минут (в ней мог быть пропуск).
+- Метку `.clean` не удалось убрать при старте — она сказала бы «чисто» после сбоя: таблица не принимает ничего, пока метка не исчезнет (проверяется при каждом запросе). Таблица, остановленная чисто и снова используемая в том же процессе, сначала убирает свою метку.
 - Блокировка `.lock`: второй процесс (новый при обновлении на Windows) отказывает, пока первый не завершится, затем читает записанное им.
 - Пропуски `aqpass`: использованные nonce — в той же таблице, на диске.
 
@@ -65,7 +68,9 @@
 | Подписи пользователя на конвертах | Нужна смена протокола клиента |
 | E-mail в запечатанном виде | Нужен формат и миграция клиентов |
 | Удаление аккаунта с подписью устройства | Сейчас удаляет только админ сервера |
-| Распространение отзывов ключей | Отзыв действует на том сервере, где его сделали |
+| Распространение отзывов ключей | **Открыто (P1).** Отзыв действует на том сервере, где его сделали; остальные узлы сети продолжают принимать отозванный ключ |
+| Полномочия доверенных узлов | **Открыто (P1).** Узел роли `network` с закреплённым ключом остаётся доверенным для чужих аккаунтов: называет любого известного отправителя (`h_deliver`), а аккаунты без печати устройства (`sealed_accounts_change_only_with_a_device_seal`) меняет по одной своей подписи. Закрывается подписями устройства на всех изменениях и конвертах (строки выше) |
+| Подписи заявок реестра имён | **Открыто (P1).** Заявки не подписаны владельцем имени (см. «Что принимается от соседей») |
 | Резервная копия ключа узла | Потеря папки данных = новый ключ = конфликт у соседей |
 | Отзыв токена приглашения в панели | Не сделан |
 
@@ -75,14 +80,15 @@
 - Docker без тома `/data`: новый ключ при каждом перезапуске → конфликт ключа у соседей при каждом старте.
 - Сервер с базой, восстановленной из копии, должен сделать resync.
 - Лимит 20 удалений в час задержит массовое законное удаление.
-- Первый старт 1.21.0-25 после старой версии — «нечистый» для таблицы повторов: подписи последних 5 минут до обновления отклоняются, соседи подпишут заново.
+- Первый старт 1.21.0-25 после старой версии — «нечистый» для таблицы повторов: 5 минут после старта подписанные запросы отклоняются, соседи подпишут заново.
+- Часы сервера, ушедшие далеко назад после того, как таблица видела «будущее» (граница в файле выше), — отказ, пока часы не догонят; в журнале ошибка с советом проверить часы и удалить файл списка.
 
 ## Тесты
 `crates/aqua-server/tests/federation.rs`: `tunnel_peer_with_pinned_key_syncs_both_ways`, `tunnel_poll_cannot_claim_another_node`, `forged_tunnel_id_does_not_downgrade`, `url_hijack_before_upgrade_is_refused`, `mixed_network_old_keyed_new` (старый узел имитирован запросами с одним секретом), `key_change_without_signature_goes_pending_conflict`, `admit_token_recovers_lost_key`, `cursor_survives_restart`, `signed_account_deletion_propagates_and_old_relay_cannot_resurrect`, `same_name_reregistered_after_deletion_keeps_it`, `solo_registry_requires_node_key_after_enforcement`, `aqpass_v2_accepted_by_old_and_new_solo`.
 
 `fed.rs`: `tombs_signed_with_a_retired_key_before_the_change`, `a_v2_request_uses_up_its_secret_signature_too`, `enforcement_is_a_ratchet`, `deadline_enforces_and_never_reverts`, `legacy_window_expires_by_itself`, `names_role_cannot_read_users`, `rotation_chain_two_steps_offline_peer`, `retired_id_cannot_rotate_again`.
 
-`replay.rs`: `a_future_stamped_entry_survives_a_restart`, `per_sender_quota_isolates_a_flood`, `pruning_is_amortized`, `crash_without_clean_mark_refuses_older_signatures`, `clean_restart_keeps_working`, `a_second_process_waits_for_the_first`.
+`replay.rs` (повторная проверка 27.11, каждый падал до исправления): `a_clock_jump_forward_then_back_does_not_reopen_a_signature`, `a_clean_mark_that_stays_closes_the_table`, `a_crash_loses_nothing_stamped_ahead`, `a_damaged_log_refuses_passes_too`, `too_far_ahead_is_refused`. Раньше: `a_future_stamped_entry_survives_a_restart`, `per_sender_quota_isolates_a_flood`, `pruning_is_amortized`, `crash_without_clean_mark_refuses_older_signatures`, `clean_restart_keeps_working`, `a_second_process_waits_for_the_first`.
 
 `directory.rs`: `cursors_persist_and_move_with_url`, `tombstone_blocks_old_generation_but_not_reregistration`, `tombstone_blocks_name_registry_resurrection`, `future_updated_at_is_refused`, `bot_rows_from_peers_are_refused`, `a_peer_row_cannot_take_another_accounts_email`, `a_forged_old_name_claim_does_not_rename_ours`, `local_changes_get_increasing_times`.
 

@@ -1338,3 +1338,61 @@ async fn tombstones_after_a_long_absence_and_the_hourly_limit() {
     let pending = sa.directory.tombs_after(cur.0, Some(&cur.1).filter(|s| !s.is_empty()).map(|s| s.as_str()), 100);
     assert_eq!(pending.len(), 5);
 }
+
+/// Review of #113: the replay table alone takes ~220 000/s; that says little
+/// of a whole federated request. Here: signed (v2 + shared secret), sent
+/// over HTTP, checked (Ed25519, the clock, the replay table with its file)
+/// and answered — `/v1/fed/ping` without a database, `/v1/fed/users` with a
+/// SQLite read of 200 accounts — 64 at a time. Printed; run with
+/// `--ignored --nocapture fed_request_throughput`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+#[ignore = "measurement"]
+async fn fed_request_throughput() {
+    let (sa, sb, ua, _ub, _tmp) = strict_pair().await;
+    let http = reqwest::Client::builder().user_agent(concat!("aqua-client-core/", env!("CARGO_PKG_VERSION"))).build().unwrap();
+    for i in 0..200 {
+        register(&http, &ua, &IdentityKeyPair::generate(), &format!("load{i}")).await;
+    }
+    let b = fed::current(&sb).unwrap();
+    // The signing side alone, for comparison.
+    let t = std::time::Instant::now();
+    for _ in 0..2000 {
+        std::hint::black_box(b.sign2(&ua, "GET", "/v1/fed/ping", b""));
+    }
+    println!("sign2 alone: {:.1} µs each", t.elapsed().as_micros() as f64 / 2000.0);
+    for path in ["/v1/fed/ping", "/v1/fed/users?since=0"] {
+        let n = 4000usize;
+        let next = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let t = std::time::Instant::now();
+        let workers: Vec<_> = (0..64)
+            .map(|_| {
+                let (b, ua, next, http) = (b.clone(), ua.clone(), next.clone(), http.clone());
+                tokio::spawn(async move {
+                    let mut lat = Vec::new();
+                    while next.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < n {
+                        let t = std::time::Instant::now();
+                        let r = http.get(format!("{ua}{path}"))
+                            .header("x-aqua-fed", b.sign("GET", path, b""))
+                            .header("x-aqua-fed2", b.sign2(&ua, "GET", path, b"").unwrap())
+                            .header("user-agent", concat!("aqua-server/", env!("CARGO_PKG_VERSION")))
+                            .send().await.unwrap();
+                        assert!(r.status().is_success(), "{path}: {}", r.status());
+                        r.bytes().await.unwrap();
+                        lat.push(t.elapsed().as_micros() as u64);
+                    }
+                    lat
+                })
+            })
+            .collect();
+        let mut lat: Vec<u64> = Vec::new();
+        for w in workers {
+            lat.extend(w.await.unwrap());
+        }
+        let el = t.elapsed();
+        lat.sort_unstable();
+        let q = |p: f64| lat[((lat.len() as f64 * p) as usize).min(lat.len() - 1)];
+        println!("{path}: {} signed requests in {el:?} — {:.0}/s, p50 {} µs, p99 {} µs (client and relay on one machine)",
+            lat.len(), lat.len() as f64 / el.as_secs_f64(), q(0.5), q(0.99));
+    }
+    drop(sa);
+}
