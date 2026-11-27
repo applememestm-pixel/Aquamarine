@@ -39,7 +39,7 @@ jobs:
       - name: cargo audit (server app)
         if: always()
         run: cargo audit --file crates/aqua-server-app/Cargo.lock
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         if: always()
         with:
           node-version: 22
@@ -110,7 +110,7 @@ jobs:
           sudo bash tools/apt-update.sh
           sudo timeout 600 apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
             librsvg2-dev patchelf libgtk-3-dev libdbus-1-dev pkg-config build-essential
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -187,7 +187,7 @@ jobs:
         with:
           name: ui-dist
           path: ui-dist
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       - name: Screenshots of the profile editor (base64 in this log)

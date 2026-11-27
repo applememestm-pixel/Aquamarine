@@ -166,7 +166,7 @@ jobs:
           workspaces: crates/aqua-client-ui -> target
           shared-key: tauri-${{ matrix.name }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -473,7 +473,7 @@ jobs:
           workspaces: crates/aqua-client-ui -> target
           shared-key: tauri-android
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -648,7 +648,7 @@ jobs:
           workspaces: crates/aqua-client-ui -> target
           shared-key: tauri-ios
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
