@@ -2127,7 +2127,7 @@
         {#if $settings.notifyDesktop}
           <div class="row">
             <span class="row-label">{$t("Notification shows")}</span>
-            <Select class="sel" value={$settings.notifyPreview ?? "full"} options={[{ value: "full", label: $t("Sender and text") }, { value: "sender", label: $t("Only the sender") }, { value: "none", label: $t("Only \"New message\"") }]}
+            <Select class="sel" value={$settings.notifyPreview ?? "none"} options={[{ value: "full", label: $t("Sender and text") }, { value: "sender", label: $t("Only the sender") }, { value: "none", label: $t("Only \"New message\"") }]}
               onchange={(v) => settings.update((s) => ({ ...s, notifyPreview: v as "full" | "sender" | "none" }))} />
           </div>
           <button class="mini-btn" onclick={testNotification}>{$t("Send a test notification")}</button>

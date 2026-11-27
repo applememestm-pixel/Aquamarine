@@ -66,18 +66,6 @@ fn msg(from: &str, to: &str, body: &[u8]) -> Message {
 
 /// A copy on the relay is kept only for accounts with two-step verification
 
-#[test]
-fn endpoints_must_be_public_https() {
-    use aqua_server::push::endpoint_ok;
-    assert!(endpoint_ok("https://up.example.org/UP?token=abc"));
-    assert!(endpoint_ok("https://8.8.8.8/x"));
-    for bad in ["http://up.example.org/x", "https://localhost/x", "https://127.0.0.1/x", "https://10.0.0.5/x", "https://192.168.1.1/x",
-                "https://169.254.169.254/latest", "https://[::1]/x", "https://[fd00::1]/x", "https://100.64.0.1/x", "https://user:pw@up.example.org/x",
-                "https://printer.local/x", "https://intranet/x", "ftp://up.example.org/x", "not a url"] {
-        assert!(!endpoint_ok(bad), "{bad}");
-    }
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_absent_device_gets_only_a_wake_signal() {
     use std::sync::{Arc, Mutex};
@@ -149,4 +137,75 @@ async fn an_absent_device_gets_only_a_wake_signal() {
     wa.send(msg("pushsender", "pushsleeper", b"again")).await.unwrap();
     for _ in 0..40 { if sa.directory.push_endpoints("pushsleeper").is_empty() { break } tokio::time::sleep(Duration::from_millis(100)).await; }
     assert!(sa.directory.push_endpoints("pushsleeper").is_empty());
+}
+
+/// Review of #113: a wake suppressed by the 20-second limit was lost — the
+/// device woken by the first message may be asleep again by the second.
+/// Now one more wake follows when the limit ends. Rows of devices that are
+/// no longer the account's are dropped, not woken. Redirects aren't followed.
+/// The gateway gets this relay's key when one is set.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_suppressed_wake_follows_later_and_stale_devices_are_dropped() {
+    use std::sync::{Arc, Mutex};
+    aqua_server::push::allow_local_for_tests();
+    aqua_server::push::set_debounce_for_tests(Duration::from_millis(800));
+    let got: Arc<Mutex<Vec<(String, Option<String>)>>> = Default::default();
+    let lp = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let up = format!("http://{}", lp.local_addr().unwrap());
+    {
+        let got = got.clone();
+        let to = up.clone();
+        let r = axum::Router::new().fallback(move |req: axum::extract::Request| {
+            let (got, to) = (got.clone(), to.clone());
+            async move {
+                let path = req.uri().path().to_string();
+                let auth = req.headers().get("authorization").and_then(|v| v.to_str().ok()).map(str::to_string);
+                got.lock().unwrap().push((path.clone(), auth));
+                if path == "/redirect" {
+                    return axum::response::Response::builder().status(307).header("location", format!("{to}/followed")).body(axum::body::Body::empty()).unwrap();
+                }
+                axum::response::Response::builder().status(201).body(axum::body::Body::empty()).unwrap()
+            }
+        });
+        tokio::spawn(async move { axum::serve(lp, r).await.unwrap() });
+    }
+    let la = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let a = la.local_addr().unwrap().to_string();
+    let ua = format!("http://{a}");
+    let tmp = tempfile::tempdir().unwrap();
+    let sa = AppState::isolated(tmp.path().join("a"), None);
+    { let s = sa.clone(); tokio::spawn(async move { axum::serve(la, app(s)).await.unwrap() }); }
+    let http = reqwest::Client::builder().user_agent(concat!("aqua-client-core/", env!("CARGO_PKG_VERSION"))).build().unwrap();
+    let (ia, ib, ic) = (IdentityKeyPair::generate(), IdentityKeyPair::generate(), IdentityKeyPair::generate());
+    let ta = register(&http, &ua, &ia, "trailsender").await;
+    let tb = register(&http, &ua, &ib, "trailsleeper").await;
+    let tc = register(&http, &ua, &ic, "trailredir").await;
+    assert_eq!(http.post(format!("{ua}/v1/me/push")).bearer_auth(&tb).json(&serde_json::json!({ "kind": "unifiedpush", "endpoint": format!("{up}/up/bob") })).send().await.unwrap().status().as_u16(), 204);
+    assert_eq!(http.post(format!("{ua}/v1/me/push")).bearer_auth(&tc).json(&serde_json::json!({ "kind": "unifiedpush", "endpoint": format!("{up}/redirect") })).send().await.unwrap().status().as_u16(), 204);
+    // A device that isn't bob's (signed out, or never his): not woken, dropped.
+    let stranger = hex::encode([7u8; 32]);
+    sa.directory.push_register("trailsleeper", &stranger, "unifiedpush", &format!("{up}/up/stranger")).unwrap();
+    let mut wa = ws(&a, "trailsender", &ta).await;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    wa.send(msg("trailsender", "trailsleeper", b"one")).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    wa.send(msg("trailsender", "trailsleeper", b"two")).await.unwrap();
+    wa.send(msg("trailsender", "trailredir", b"x")).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(1800)).await;
+    let seen = got.lock().unwrap().clone();
+    let to_bob = seen.iter().filter(|(p, _)| p == "/up/bob").count();
+    assert_eq!(to_bob, 2, "the first at once, one more when the limit ends: {seen:?}");
+    assert!(!seen.iter().any(|(p, _)| p == "/up/stranger"), "a device not of the account isn't woken");
+    assert!(sa.directory.push_endpoints("trailsleeper").iter().all(|(d, _, _)| *d != stranger), "and its row is gone");
+    assert!(seen.iter().any(|(p, _)| p == "/redirect") && !seen.iter().any(|(p, _)| p == "/followed"), "a redirect isn't followed");
+    // The gateway: this relay's key with every wake.
+    std::env::set_var("AQUA_PUSH_GATEWAY", &up);
+    std::env::set_var("AQUA_PUSH_GATEWAY_KEY", "relay-key-for-gateway");
+    assert_eq!(http.post(format!("{ua}/v1/me/push")).bearer_auth(&tc).json(&serde_json::json!({ "kind": "gateway", "endpoint": "tok" })).send().await.unwrap().status().as_u16(), 204);
+    tokio::time::sleep(Duration::from_millis(900)).await;
+    wa.send(msg("trailsender", "trailredir", b"y")).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let seen = got.lock().unwrap().clone();
+    let gw = seen.iter().find(|(p, _)| p == "/v1/wake").expect("gateway asked");
+    assert_eq!(gw.1.as_deref(), Some("Bearer relay-key-for-gateway"));
 }

@@ -134,7 +134,7 @@ export function startBgNotify(): () => void {
           new_text: i18n.tr("New message"),
           read_text: i18n.tr("Mark as read"),
           reply_text: i18n.tr("Reply"),
-          preview: s.notifyPreview ?? "full",
+          preview: s.notifyPreview ?? "none",
           restricted: rules.who !== "everybody",
           denied: rules.deny,
           allowed: [...allowed],

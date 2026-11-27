@@ -1986,6 +1986,8 @@ async fn remove_device(
     let was_primary = state.directory.identity_for(&me).is_some_and(|p| directory::device_id(&p) == id);
     match state.directory.remove_device(&me, &id, Some(&dh)) {
         Ok(true) => {
+            // A device signed out isn't woken any more (push.rs).
+            push::drop_stale(&state.directory, &me);
             // Drop the device's live connections and queued envelopes.
             let addr = if was_primary { me.clone() } else { format!("{me}~{id}") };
             if let Some(u) = state.users.get(&addr).map(|u| u.value().clone()) {
