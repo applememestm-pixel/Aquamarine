@@ -96,6 +96,9 @@ class WidgetArgs {
 /** ksWrap: the vault master key (hex) to wrap. */
 @InvokeArg
 class PushArgs {
+  /** Whose: the account slot on this phone (each has its own token and
+   *  endpoint — two accounts' relays can't tell they are one phone). */
+  var instance: String = "main"
   var on: Boolean = false
   /** The notification text, in the UI language ("New message"). */
   var text: String? = null
@@ -313,10 +316,10 @@ class AquaRelayPlugin(private val activity: Activity) : Plugin(activity) {
         activity.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
         activity.requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 7794)
       }
-      val d = AquaPush.register(activity)
+      val d = AquaPush.register(activity, a.instance)
       invoke.resolve(JSObject().put("distributor", d ?: "").put("ok", d != null))
     } else {
-      AquaPush.unregister(activity)
+      AquaPush.unregister(activity, a.instance)
       invoke.resolve(JSObject().put("ok", true))
     }
   }
@@ -325,11 +328,12 @@ class AquaRelayPlugin(private val activity: Activity) : Plugin(activity) {
    *  which distributors are installed. */
   @Command
   fun pushState(invoke: Invoke) {
+    val a = invoke.parseArgs(PushArgs::class.java)
     val list = JSArray()
     AquaPush.distributors(activity).forEach { list.put(it) }
     invoke.resolve(JSObject()
-      .put("on", AquaPush.on(activity))
-      .put("endpoint", AquaPush.endpoint(activity) ?: "")
+      .put("on", AquaPush.on(activity, a.instance))
+      .put("endpoint", AquaPush.endpoint(activity, a.instance) ?: "")
       .put("distributor", AquaPush.distributor(activity) ?: "")
       .put("distributors", list))
   }
@@ -880,13 +884,19 @@ object AquaPush {
   const val ACK = "org.unifiedpush.android.distributor.MESSAGE_ACK"
 
   private fun prefs(c: Context) = c.getSharedPreferences(FILE, Context.MODE_PRIVATE)
-  fun on(c: Context) = prefs(c).getBoolean("on", false)
-  fun endpoint(c: Context): String? = prefs(c).getString("endpoint", null)
+  private fun safe(i: String) = i.filter { it.isLetterOrDigit() || it == '-' || it == '_' }.take(32).ifEmpty { "main" }
+  fun on(c: Context, i: String) = prefs(c).getBoolean("on:" + safe(i), false)
+  fun endpoint(c: Context, i: String): String? = prefs(c).getString("endpoint:" + safe(i), null)
   fun distributor(c: Context): String? = prefs(c).getString("distributor", null)
-  fun token(c: Context): String? = prefs(c).getString("token", null)
+  fun token(c: Context, i: String): String? = prefs(c).getString("token:" + safe(i), null)
   fun setText(c: Context, t: String) = prefs(c).edit().putString("text", t).apply()
   fun text(c: Context): String = prefs(c).getString("text", null) ?: "New message"
-  fun setEndpoint(c: Context, e: String?) = prefs(c).edit().putString("endpoint", e).apply()
+  fun setEndpoint(c: Context, i: String, e: String?) = prefs(c).edit().putString("endpoint:" + safe(i), e).apply()
+  /** The account slot a distributor's token belongs to (null: not ours). */
+  fun instanceOf(c: Context, token: String?): String? {
+    if (token.isNullOrEmpty()) return null
+    return prefs(c).all.entries.firstOrNull { it.key.startsWith("token:") && it.value == token }?.key?.removePrefix("token:")
+  }
 
   /** Installed distributors (package names). */
   fun distributors(c: Context): List<String> {
@@ -905,11 +915,12 @@ object AquaPush {
 
   /** Register with the chosen (or the only / first) distributor; null when
    *  none is installed. The endpoint comes later (AquaPushReceiver). */
-  fun register(c: Context): String? {
+  fun register(c: Context, instance: String): String? {
+    val i = safe(instance)
     val all = distributors(c)
     val d = distributor(c)?.takeIf { it in all } ?: all.firstOrNull() ?: return null
-    val token = token(c) ?: java.util.UUID.randomUUID().toString().also { prefs(c).edit().putString("token", it).apply() }
-    prefs(c).edit().putBoolean("on", true).putString("distributor", d).apply()
+    val token = token(c, i) ?: java.util.UUID.randomUUID().toString().also { prefs(c).edit().putString("token:$i", it).apply() }
+    prefs(c).edit().putBoolean("on:$i", true).putString("distributor", d).apply()
     c.sendBroadcast(Intent(REGISTER).setPackage(d)
       .putExtra("token", token)
       .putExtra("application", c.packageName)
@@ -918,14 +929,15 @@ object AquaPush {
     return d
   }
 
-  fun unregister(c: Context) {
+  fun unregister(c: Context, instance: String) {
+    val i = safe(instance)
     val d = distributor(c)
-    val token = token(c)
+    val token = token(c, i)
     if (d != null && token != null) {
       c.sendBroadcast(Intent(UNREGISTER).setPackage(d).putExtra("token", token).putExtra("application", c.packageName).putExtra("pi", pi(c)))
     }
     // A new token next time: the old endpoint stays useless to whoever kept it.
-    prefs(c).edit().putBoolean("on", false).remove("endpoint").remove("token").apply()
+    prefs(c).edit().putBoolean("on:$i", false).remove("endpoint:$i").remove("token:$i").apply()
   }
 
   /** The relay's wake signal: say so (no sender, no text — there is none),
@@ -968,13 +980,16 @@ object AquaPush {
 class AquaPushReceiver : BroadcastReceiver() {
   override fun onReceive(context: Context, intent: Intent?) {
     val i = intent ?: return
-    val mine = AquaPush.token(context) ?: return
-    if (i.getStringExtra("token") != mine || !AquaPush.on(context)) return
+    val mine = i.getStringExtra("token")
+    val inst = AquaPush.instanceOf(context, mine) ?: return
+    if (!AquaPush.on(context, inst)) return
     when (i.action) {
       "org.unifiedpush.android.connector.NEW_ENDPOINT" -> {
         val e = i.getStringExtra("endpoint") ?: return
-        // https only (the relay refuses anything else too).
-        if (e.startsWith("https://") && e.length <= 2048) AquaPush.setEndpoint(context, e)
+        // https only (the relay refuses anything else too). The app sends
+        // it to the relay when it next looks (push.rs, every minute while
+        // connected, and on each connection).
+        if (e.startsWith("https://") && e.length <= 2048) AquaPush.setEndpoint(context, inst, e)
       }
       "org.unifiedpush.android.connector.MESSAGE" -> {
         i.getStringExtra("id")?.let { id ->
@@ -983,7 +998,7 @@ class AquaPushReceiver : BroadcastReceiver() {
         AquaPush.woken(context)
       }
       "org.unifiedpush.android.connector.UNREGISTERED", "org.unifiedpush.android.connector.REGISTRATION_FAILED" ->
-        AquaPush.setEndpoint(context, null)
+        AquaPush.setEndpoint(context, inst, null)
     }
   }
 }

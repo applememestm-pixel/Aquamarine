@@ -48,8 +48,10 @@ pub fn complete_registration(
 /// transport. The identity/vault is preserved. Returns refreshed init info
 /// (registered=false) so the UI reopens the login window.
 #[tauri::command]
-pub fn log_out(state: State<'_, StdMutex<AppState>>) -> Result<InitInfo, String> {
+pub fn log_out(app: AppHandle, state: State<'_, StdMutex<AppState>>) -> Result<InitInfo, String> {
     let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    // This account isn't woken here any more (push.rs).
+    crate::push::on_log_out(&app, s.transport.clone());
     crate::storage::on_log_out(&mut s);
     s.log_out();
     Ok(s.init_info())
@@ -472,7 +474,7 @@ pub async fn connect_to_server(
     // Where this phone is woken while the app is closed (push.rs).
     {
         let app_p = app.clone();
-        tokio::spawn(async move { crate::push::sync(&app_p).await });
+        tokio::spawn(crate::push::watch(app_p));
     }
     // My other devices get what they lack of my chats, and I get theirs.
     crate::history_sync::start(&app);
