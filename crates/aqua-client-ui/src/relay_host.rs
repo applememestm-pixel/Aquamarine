@@ -123,6 +123,19 @@ pub mod android {
             .map_err(|e| e.to_string())
     }
 
+    /// UnifiedPush on / off (AquaPush in AquaRelay.kt); the distributor's
+    /// package name when registered.
+    pub fn push_set(on: bool, text: &str) -> Result<serde_json::Value, String> {
+        let h = HANDLE.get().ok_or("push is not available")?;
+        h.run_mobile_plugin::<serde_json::Value>("pushSet", serde_json::json!({ "on": on, "text": text })).map_err(|e| e.to_string())
+    }
+
+    /// `{on, endpoint, distributor, distributors}`.
+    pub fn push_state() -> Result<serde_json::Value, String> {
+        let h = HANDLE.get().ok_or("push is not available")?;
+        h.run_mobile_plugin::<serde_json::Value>("pushState", serde_json::json!({})).map_err(|e| e.to_string())
+    }
+
     /// Start the app over in a fresh process (another account was picked).
     pub fn relaunch() {
         let Some(h) = HANDLE.get() else { return };

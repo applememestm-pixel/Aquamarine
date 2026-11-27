@@ -11,7 +11,7 @@
   import { portal } from "../actions";
   import { chatLines } from "../listLook";
   import { inAppBrowser } from "../browser";
-  import { IS_MOBILE, IS_DESKTOP } from "../platform";
+  import { IS_MOBILE, IS_DESKTOP, IS_ANDROID } from "../platform";
   import { GUIDE } from "../errorCodes";
   import { meetOpen } from "./MeetSheet.svelte";
   import { secretary } from "../botHelpers";
@@ -42,6 +42,16 @@
     const { ensureNotifyPermission, osNotify } = await import("../notify");
     if (!(await ensureNotifyPermission(true))) { showToast(tr("The system doesn't allow notifications for Aquamarine")); return; }
     await osNotify("Aquamarine", tr("Notifications work 🎉"));
+  }
+  /** UnifiedPush (push.rs): {on, endpoint, distributor, distributors}. */
+  type PushState = { on?: boolean; endpoint?: string; distributor?: string; distributors?: string[] };
+  let push = $state<PushState>({});
+  if (IS_ANDROID) void invoke<PushState>("push_unifiedpush_state").then((v) => (push = v)).catch(() => {});
+  async function togglePush() {
+    try {
+      push = await invoke<PushState>("push_unifiedpush_set", { on: !push.on, text: tr("New message") });
+      setTimeout(() => void invoke<PushState>("push_unifiedpush_state").then((v) => (push = v)).catch(() => {}), 4000);
+    } catch (e) { showToast(tr(String(e))); }
   }
   let bioAvail = $state(false);
   void biometricAvailable().then((v) => (bioAvail = v));
@@ -2106,6 +2116,15 @@
         </button>
         <button class="mini-btn" onclick={() => void invoke<boolean>("battery_exempt").then((ok) => { if (ok) showToast(tr("Battery optimisation is already off for Aquamarine")); }).catch((e) => showToast(String(e)))}>{$t("Don't let the battery saver stop it")}</button>
         <div class="foot-note">{$t("Some phones (Xiaomi, Huawei, Samsung…) still close apps in the background: allow Aquamarine to run in the background / autostart in the phone's battery settings.")}</div>
+        {#if IS_ANDROID}
+        <button class="toggle-row" onclick={togglePush}>
+          <div class="tr-text"><div class="tr-title">{$t("Wake through UnifiedPush")}</div><div class="tr-sub">{$t("Without Google: a UnifiedPush app (for example ntfy) tells the phone that something arrived — the server sends only “wake up”, nothing of the message. The notification says only “New message”.")}</div></div>
+          <span class="switch" class:on={!!push.on}></span>
+        </button>
+        {#if push.on}
+        <div class="foot-note">{push.endpoint ? $t("Through {d}", { d: push.distributor || "" }) : $t("Waiting for the UnifiedPush app…")}</div>
+        {/if}
+        {/if}
       </section>
       {/if}
       <section class="group">

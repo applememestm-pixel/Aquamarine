@@ -530,7 +530,12 @@ jobs:
           sed -i "0,/<application/s##${callperms}#" "$m"
           calls='<service android:name=".AquaCallService" android:exported="false" android:foregroundServiceType="microphone|camera" />\n    <receiver android:name=".AquaBootReceiver" android:exported="false"><intent-filter><action android:name="android.intent.action.BOOT_COMPLETED" /><action android:name="android.intent.action.MY_PACKAGE_REPLACED" /></intent-filter></receiver>\n    </application>'
           sed -i "s#</application>#${calls}#" "$m"
-          grep -n 'AquaRelayService\|AquaScreenService\|AquaSyncService\|AquaCallService\|AquaBootReceiver\|FOREGROUND\|MULTICAST' "$m"
+          # Waking through UnifiedPush (AquaPush): the distributor's receiver and <queries>.
+          upq='<queries><intent><action android:name="org.unifiedpush.android.distributor.REGISTER" /></intent></queries>\n    <application'
+          sed -i "0,/<application/s##${upq}#" "$m"
+          upr='<receiver android:name=".AquaPushReceiver" android:exported="true"><intent-filter><action android:name="org.unifiedpush.android.connector.NEW_ENDPOINT" /><action android:name="org.unifiedpush.android.connector.MESSAGE" /><action android:name="org.unifiedpush.android.connector.UNREGISTERED" /><action android:name="org.unifiedpush.android.connector.REGISTRATION_FAILED" /></intent-filter></receiver>\n    </application>'
+          sed -i "s#</application>#${upr}#" "$m"
+          grep -n 'AquaRelayService\|AquaScreenService\|AquaSyncService\|AquaCallService\|AquaBootReceiver\|AquaPushReceiver\|FOREGROUND\|MULTICAST' "$m"
           # Home-screen widget: unread chats (android/widget)
           cp ../../android/widget/AquaWidget.kt "$(dirname "$(find gen/android/app/src/main/java -name MainActivity.kt | head -1)")/AquaWidget.kt"
           cp -r ../../android/widget/res/* gen/android/app/src/main/res/

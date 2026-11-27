@@ -775,6 +775,32 @@ impl Transport {
         Ok(())
     }
 
+    // ---- Waking this device while it isn't connected (/v1/me/push) ----
+
+    /// Where the relay wakes this device: `kind` "unifiedpush" (an endpoint
+    /// of the person's own distributor) or "gateway" (a push-gateway token).
+    /// `Ok(false)`: the relay is older and has no push.
+    pub async fn push_set(&self, kind: &str, endpoint: &str) -> Result<bool, TransportError> {
+        let url = format!("{}/v1/me/push", self.server_url.trim_end_matches('/'));
+        let r = self.http.post(&url).bearer_auth(self.bearer().await?)
+            .json(&serde_json::json!({ "kind": kind, "endpoint": endpoint })).send().await?;
+        match r.status().as_u16() {
+            200..=299 => Ok(true),
+            404 | 405 => Ok(false),
+            status => Err(TransportError::Server { status, body: r.text().await.unwrap_or_default() }),
+        }
+    }
+
+    /// Stop waking this device.
+    pub async fn push_unset(&self) -> Result<(), TransportError> {
+        let url = format!("{}/v1/me/push", self.server_url.trim_end_matches('/'));
+        let r = self.http.delete(&url).bearer_auth(self.bearer().await?).send().await?;
+        match r.status().as_u16() {
+            200..=299 | 404 | 405 => Ok(()),
+            status => Err(TransportError::Server { status, body: r.text().await.unwrap_or_default() }),
+        }
+    }
+
     // ---- Encrypted history shared by my devices (/v1/me/hist) ----
 
     /// Records changed after `since`: (key, seq).

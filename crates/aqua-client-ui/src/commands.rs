@@ -469,6 +469,11 @@ pub async fn connect_to_server(
         let app_dt = app.clone();
         tokio::spawn(async move { crate::devtrust::start(&app_dt).await });
     }
+    // Where this phone is woken while the app is closed (push.rs).
+    {
+        let app_p = app.clone();
+        tokio::spawn(async move { crate::push::sync(&app_p).await });
+    }
     // My other devices get what they lack of my chats, and I get theirs.
     crate::history_sync::start(&app);
     // Messages written while offline go out now (mesh.rs).

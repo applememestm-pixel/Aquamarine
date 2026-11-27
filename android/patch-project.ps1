@@ -138,6 +138,13 @@ if ($x -notmatch 'AquaCallService') {
   [IO.File]::WriteAllText($m, $x)
   Write-Host '[patch] call service and boot reminder added'
 }
+# Waking through UnifiedPush (AquaRelay.kt: AquaPush, AquaPushReceiver).
+if ($x -notmatch 'AquaPushReceiver') {
+  $x = ([regex]'<application').Replace($x, '<queries><intent><action android:name="org.unifiedpush.android.distributor.REGISTER" /></intent></queries>' + "`n    <application", 1)
+  $x = $x.Replace('</application>', '<receiver android:name=".AquaPushReceiver" android:exported="true"><intent-filter><action android:name="org.unifiedpush.android.connector.NEW_ENDPOINT" /><action android:name="org.unifiedpush.android.connector.MESSAGE" /><action android:name="org.unifiedpush.android.connector.UNREGISTERED" /><action android:name="org.unifiedpush.android.connector.REGISTRATION_FAILED" /></intent-filter></receiver>' + "`n    </application>")
+  [IO.File]::WriteAllText($m, $x)
+  Write-Host '[patch] UnifiedPush receiver added'
+}
 # In-app updates (crates/aqua-client-ui/src/updates.rs): installing the
 # downloaded APK needs this permission.
 if ($x -notmatch 'REQUEST_INSTALL_PACKAGES') {
