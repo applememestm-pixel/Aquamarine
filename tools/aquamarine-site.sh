@@ -8,7 +8,8 @@
 #   bash aquamarine-site.sh docker     # то же в Docker-контейнере (фоном, с автозапуском)
 #   bash aquamarine-site.sh stop       # остановить контейнер
 #   PORT=9000 bash aquamarine-site.sh  # другой порт
-#   TAG=latest bash aquamarine-site.sh update   # стабильный релиз вместо nightly
+#   TAG=v1.21.0-24 bash aquamarine-site.sh update   # другой выпуск (по умолчанию — последний)
+#   FROM_MAIN=1 bash aquamarine-site.sh update     # страницы из main, без проверки подписи
 #
 # Termux: pkg install curl python   (скрипт сам предложит), затем
 #   curl -fsSLO https://raw.githubusercontent.com/applememestm-pixel/Aquamarine/main/tools/aquamarine-site.sh
@@ -17,7 +18,12 @@ set -euo pipefail
 
 REPO="applememestm-pixel/Aquamarine"
 PORT="${PORT:-8080}"
-TAG="${TAG:-nightly}"
+# Ночных сборок больше нет: по умолчанию — последний выпуск.
+TAG="${TAG:-latest}"
+# Открытый ключ подписи выпусков (= переменная репозитория UPDATE_PUBKEY;
+# release-signing-check.yml сверяет). Сайт ставится, только если архив
+# назван в SHA256SUMS.txt, подписанном этим ключом (AQUA-SEC-012).
+PUBKEY="d5753e7d1aa56046d29e0bbcf220497d78a4def55fec7c62d862e1d42f095d96"
 IMAGE="ghcr.io/applememestm-pixel/aquamarine-site:latest"
 NAME="aquamarine-site"
 HERE="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")" && pwd)"
@@ -101,18 +107,42 @@ local_source() {
   return 1
 }
 
+# Hex → bytes (без xxd: его нет в Termux по умолчанию).
+unhex() { printf '%b' "$(sed 's/../\\x&/g')"; }
+sha256() { openssl dgst -sha256 -r "$1" | cut -d' ' -f1; }
+
+# The release's SHA256SUMS.txt is signed by PUBKEY, names release $2 (its
+# VERSION line) and lists file $3 with its hash. Anything else: stop.
+verify_release() {
+  local d=$1 version=${2#v} file=$3
+  command -v openssl >/dev/null 2>&1 || die "для проверки подписи нужен openssl (Termux: pkg install openssl-tool; Debian: sudo apt install openssl)"
+  [ -s "$d/SHA256SUMS.txt" ] && [ -s "$d/SHA256SUMS.txt.sig" ] || die "у выпуска $2 нет подписанного списка сумм — сайт не установлен (другой выпуск: TAG=v1.21.0-24 bash $0 update)"
+  printf '302a300506032b6570032100%s' "$PUBKEY" | unhex > "$d/pub.der"
+  openssl pkey -pubin -inform DER -in "$d/pub.der" -out "$d/pub.pem" 2>/dev/null || die "openssl не читает ключ Ed25519 — нужна версия 1.1.1 или новее"
+  tr -d ' \n\r' < "$d/SHA256SUMS.txt.sig" | unhex > "$d/sig.bin"
+  openssl pkeyutl -verify -pubin -inkey "$d/pub.pem" -rawin -in "$d/SHA256SUMS.txt" -sigfile "$d/sig.bin" >/dev/null 2>&1 \
+    || die "подпись списка сумм выпуска $2 неверна — сайт не установлен"
+  local want; want=$(printf '%s' "$version" > "$d/VERSION.want" && sha256 "$d/VERSION.want")
+  grep -qiE "^$want [ *]?VERSION\$" "$d/SHA256SUMS.txt" || die "подписанный список сумм не от выпуска $2 — сайт не установлен"
+  local h; h=$(sha256 "$d/$file")
+  grep -qiE "^$h [ *]?$file\$" "$d/SHA256SUMS.txt" || die "$file не совпадает с подписанным списком сумм — сайт не установлен"
+}
+
 fetch_site() {
   need curl curl
   need tar tar
   local tmp; tmp=$(mktemp -d)
-  local url="https://github.com/$REPO/releases/download/$TAG/aquamarine-site.tar.gz"
-  [ "$TAG" = latest ] && url="https://github.com/$REPO/releases/latest/download/aquamarine-site.tar.gz"
-  say "Скачиваю сайт ($TAG)…"
-  if curl -fsSL --retry 2 "$url" -o "$tmp/site.tgz" && tar -xzf "$tmp/site.tgz" -C "$tmp" && [ -f "$tmp/aquamarine-site/index.html" ]; then
-    :
-  else
-    # No bundle in the release yet — take the pages straight from the repository.
-    say "Архива в релизе нет — беру из репозитория (main)…"
+  local tag=$TAG
+  if [ "$tag" = latest ]; then
+    # …/releases/latest ведёт на …/releases/tag/<тег>.
+    tag=$(curl -fsSL -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest") || die "не удалось узнать последний выпуск — есть ли интернет?"
+    tag=${tag##*/tag/}
+  fi
+  case "$tag" in v[0-9]*) ;; *) die "не похоже на тег выпуска: $tag" ;; esac
+  local base="https://github.com/$REPO/releases/download/$tag"
+  if [ "${FROM_MAIN:-0}" = 1 ]; then
+    # Явно попросили: страницы прямо из ветки main, БЕЗ проверки подписи.
+    say "FROM_MAIN=1: беру страницы из ветки main без проверки подписи."
     curl -fsSL --retry 2 "https://codeload.github.com/$REPO/tar.gz/refs/heads/main" -o "$tmp/repo.tgz" \
       || die "не удалось скачать сайт — есть ли интернет?"
     tar -xzf "$tmp/repo.tgz" -C "$tmp"
@@ -122,6 +152,14 @@ fetch_site() {
     cp -r "$src/site/." "$tmp/aquamarine-site/"
     cp "$src"/docs/*.md "$tmp/aquamarine-site/docs/" 2>/dev/null || true
     cp "$src/README.md" "$tmp/aquamarine-site/docs/passport.md" 2>/dev/null || true
+  else
+    say "Скачиваю сайт ($tag) и проверяю подпись…"
+    for f in aquamarine-site.tar.gz SHA256SUMS.txt SHA256SUMS.txt.sig; do
+      curl -fsSL --retry 2 "$base/$f" -o "$tmp/$f" || [ "$f" != aquamarine-site.tar.gz ] || die "в выпуске $tag нет архива сайта (страницы из main без проверки: FROM_MAIN=1 bash $0 update)"
+    done
+    verify_release "$tmp" "$tag" aquamarine-site.tar.gz
+    tar -xzf "$tmp/aquamarine-site.tar.gz" -C "$tmp" && [ -f "$tmp/aquamarine-site/index.html" ] || die "архив сайта повреждён"
+    say "Подпись верна: сайт выпуска $tag."
   fi
   rm -rf "$tmp/aquamarine-site/downloads"
   mkdir -p "$DATA"

@@ -140,6 +140,8 @@ jobs:
         run: python3 tools/settings_index.py --check
       - name: Android plugins and services (release APK)
         run: python3 tools/check_android.py
+      - name: the site script installs only a signed release (AQUA-SEC-012)
+        run: bash tools/site-verify-test.sh
       - name: cargo check + unit tests (desktop app)
         working-directory: crates/aqua-client-ui
         run: |
